@@ -193,6 +193,9 @@ kbd {
 .skill .meta { font-size: .8rem; color: var(--ink-3); }
 
 /* ---------------------------------------------------------------- practice */
+/* Answering view is capped at ~78% of the 1000px shell (780px) so stems and
+   choices read at a comfortable line length; other routes stay full width. */
+.practice-view { max-width: 780px; margin: 0 auto; }
 .prac-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .8rem; }
 .dots { display: flex; gap: 5px; flex: 1; min-width: 120px; }
 .dot { width: 100%; height: 6px; border-radius: 999px; background: var(--line); }
@@ -201,7 +204,7 @@ kbd {
 .dot.current { background: var(--blue); }
 
 .q-meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-bottom: .7rem; }
-.stimulus { font-size: 1.02rem; }
+.stimulus { font-size: 1.125rem; }
 .stimulus .text-label { font-weight: 650; margin-bottom: .2rem; }
 .stimulus ul { margin: 0 0 .85em; padding-left: 1.15rem; }
 .stimulus li { margin-bottom: .3em; }
@@ -209,12 +212,12 @@ kbd {
   display: inline-block; min-width: 4.2em; border-bottom: 1.5px solid currentColor;
   vertical-align: baseline; height: 1em;
 }
-.stem { font-weight: 650; margin: .9rem 0 .8rem; }
+.stem { font-size: 1.125rem; font-weight: 650; margin: .9rem 0 .8rem; }
 
 .choices { display: flex; flex-direction: column; gap: .5rem; margin: 0 0 .9rem; padding: 0; list-style: none; }
 .choice {
   display: flex; gap: .7rem; align-items: flex-start; width: 100%; text-align: left;
-  font: inherit; color: var(--ink); background: var(--card);
+  font: inherit; font-size: 1.25rem; color: var(--ink); background: var(--card);
   border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
   padding: .7rem .8rem; cursor: pointer;
 }
@@ -245,6 +248,11 @@ kbd {
 .feedback.correct .icon { background: var(--green); }
 .feedback.incorrect { border-color: var(--red); }
 .feedback.incorrect .icon { background: var(--red); }
+.choice-why {
+  font-size: 1rem; color: var(--ink-2);
+  padding: .35rem .8rem .15rem 3.2rem;
+}
+.choice-why b { font-weight: 650; color: var(--ink); }
 .rationale p { margin: 0 0 .7em; }
 .rationale .choice-why { margin-bottom: .6rem; }
 .rationale .choice-why b { font-weight: 650; }

@@ -141,44 +141,37 @@
       '.</div>';
   }
 
-  function rationaleHTML(question, chosenIndex) {
-    var parsed = C.parseRationale(question.analysis, question.answer);
-    var chosen = chosenIndex == null ? null : VERDICT[chosenIndex];
-    var html = '<div class="rationale">';
+  /* The explanation for one choice, rendered beneath that choice once the
+   * answer is known. '' when the rationale holds no text for the letter. */
+  function whyBlockHTML(parsed, letter) {
+    var text = letter === parsed.best ? parsed.bestText : (parsed.wrong[letter] || '');
+    if (!text) return '';
+    return '<div class="choice-why"><b>Why ' + letter + ' is ' +
+      (letter === parsed.best ? 'correct' : 'incorrect') + '.</b> ' + esc(text) + '</div>';
+  }
 
-    if (parsed.parsed) {
-      html += '<div class="choice-why"><b>Why ' + parsed.best + ' is correct.</b> ' +
-        esc(parsed.bestText) + '</div>';
-      if (chosen && chosen !== question.answer && parsed.wrong[chosen]) {
-        html += '<div class="choice-why"><b>Why ' + chosen + ' is incorrect.</b> ' +
-          esc(parsed.wrong[chosen]) + '</div>';
-      }
-      html += '<details><summary>Full explanation</summary>';
-      VERDICT.forEach(function (letter) {
-        if (letter === parsed.best) return;
-        if (!parsed.wrong[letter]) return;
-        html += '<div class="choice-why"><b>' + letter + '.</b> ' +
-          esc(parsed.wrong[letter]) + '</div>';
-      });
-      html += '</details>';
-    } else {
-      html += '<p>' + esc(question.analysis).replace(/\n{2,}/g, '</p><p>') + '</p>';
-    }
-    return html + '</div>';
+  /* Items whose rationale cannot be split per choice fall back to the raw
+   * analysis text, shown with the verdict. */
+  function fallbackRationaleHTML(question, parsed) {
+    if (parsed.parsed || !question.analysis) return '';
+    return '<div class="rationale"><p>' +
+      esc(question.analysis).replace(/\n{2,}/g, '</p><p>') + '</p></div>';
   }
 
   /* Read-only rendering of a question, used in review lists. */
   function staticQuestionHTML(question) {
+    var parsed = C.parseRationale(question.analysis, question.answer);
     var choices = question.choices.map(function (text, i) {
       var letter = VERDICT[i];
       var cls = letter === question.answer ? ' is-correct' : ' dimmed';
-      return '<li class="choice' + cls + '"><span class="letter">' + letter +
-        '</span><span>' + inline(text) + '</span></li>';
+      return '<li><div class="choice' + cls + '"><span class="letter">' + letter +
+        '</span><span>' + inline(text) + '</span></div>' +
+        whyBlockHTML(parsed, letter) + '</li>';
     }).join('');
     return '<div class="stimulus">' + stimulusHTML(question.stimulus) + '</div>' +
       '<div class="stem">' + esc(question.stem) + '</div>' +
       '<ul class="choices">' + choices + '</ul>' +
-      warningHTML(question) + rationaleHTML(question, null);
+      warningHTML(question) + fallbackRationaleHTML(question, parsed);
   }
 
   /* ------------------------------------------------------------ chrome */
@@ -363,14 +356,16 @@
     if (session.index >= session.ids.length) { renderResults(); return; }
 
     appEl.innerHTML =
-      '<div class="prac-head">' +
-        '<a class="btn btn-ghost btn-sm" href="#/">← Exit</a>' +
-        '<div><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
-          esc(modeLabel(session.cfg.mode)) + '</span></div>' +
-        '<div class="dots" id="dots"></div>' +
-        '<span class="pill" id="timer">0:00</span>' +
-      '</div>' +
-      '<div class="card" id="qcard"></div>';
+      '<div class="practice-view">' +
+        '<div class="prac-head">' +
+          '<a class="btn btn-ghost btn-sm" href="#/">← Exit</a>' +
+          '<div><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
+            esc(modeLabel(session.cfg.mode)) + '</span></div>' +
+          '<div class="dots" id="dots"></div>' +
+          '<span class="pill" id="timer">0:00</span>' +
+        '</div>' +
+        '<div class="card" id="qcard"></div>' +
+      '</div>';
 
     startTimer();
     showQuestion(session.index);
@@ -493,10 +488,12 @@
     saveState();
     renderPills();
 
+    var parsed = C.parseRationale(question.analysis, question.answer);
     $$('#choices .choice').forEach(function (button, i) {
       var letter = VERDICT[i];
       button.disabled = true;
       button.className = choiceClass(letter, i, question);
+      button.parentNode.insertAdjacentHTML('beforeend', whyBlockHTML(parsed, letter));
     });
 
     var last = session.index === session.ids.length - 1;
@@ -522,7 +519,7 @@
             : 'Not quite — the answer is ' + result.expected +
               (result.chosen !== result.expected ? ' (you chose ' + result.chosen + ')' : '')) +
         '</div>' +
-        rationaleHTML(question, session.selected) +
+        fallbackRationaleHTML(question, parsed) +
         '<div class="small muted" style="margin-top:.6rem">' + mastery + ' · ' + when +
         '</div>' +
       '</div>';
