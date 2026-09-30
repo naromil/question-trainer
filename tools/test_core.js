@@ -1,4 +1,7 @@
-/* Tests for the trainer's logic and generated data.  Run:  node tools/test_core.js
+/* Copyright (c) 2026 naromil. All rights reserved.
+ * No College Board question content is distributed with this repository; see NOTICE.md.
+ *
+ * Tests for the trainer's logic and generated data.  Run:  node tools/test_core.js
  *
  * Only the things a user could plausibly notice go in here: grading, mastery,
  * the review schedule, session selection, state import robustness, and the
@@ -10,7 +13,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const C = require('../app/core.js');
-const DATA = require('../app/data/questions.js');
+
+/* app/data/questions.js is generated locally and never distributed (see NOTICE.md),
+ * so the data-integrity tests skip — rather than explode the whole suite — when it is
+ * absent. Regenerate it with `python3 tools/build_app_data.py`. */
+const DATA_PATH = require('node:path').join(__dirname, '..', 'app', 'data', 'questions.js');
+const DATA = require('node:fs').existsSync(DATA_PATH) ? require(DATA_PATH) : null;
+const dataTest = DATA ? test : test.skip;
 
 const DAY = C.DAY_MS;
 const NOW = Date.UTC(2026, 8, 29, 12, 0, 0);
@@ -38,7 +47,7 @@ function question(overrides) {
 
 /* ------------------------------------------------------------- the data */
 
-test('generated data: every item is complete and gradeable', () => {
+dataTest('generated data: every item is complete and gradeable', () => {
   assert.equal(DATA.meta.difficulty, 'Hard');
   assert.equal(DATA.meta.count, DATA.questions.length);
   assert.ok(DATA.questions.length > 200, 'expected the hard tier to be sizeable');
@@ -62,7 +71,7 @@ test('generated data: every item is complete and gradeable', () => {
   );
 });
 
-test('generated data: every rationale parses per choice, matching the key', () => {
+dataTest('generated data: every rationale parses per choice, matching the key', () => {
   for (const q of DATA.questions) {
     const parsed = C.parseRationale(q.analysis, q.answer);
     assert.equal(parsed.parsed, true, `${q.id} rationale not parsed`);

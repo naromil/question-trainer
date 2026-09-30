@@ -1,4 +1,7 @@
-/* SAT trainer - pure logic.
+/* Copyright (c) 2026 naromil. All rights reserved.
+ * No College Board question content is distributed with this repository; see NOTICE.md.
+ *
+ * SAT trainer - pure logic.
  *
  * No DOM, no storage: everything here is a plain function over the state
  * object so it can be unit tested in node (tools/test_core.js) and reused by

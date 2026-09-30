@@ -1,4 +1,8 @@
-/* SAT Hard Mode - the app: routing, rendering, storage.
+/* Copyright (c) 2026 naromil. All rights reserved.
+ * No College Board question content is distributed with this repository: the generated
+ * data file app/data/questions.js is gitignored and local-only. See NOTICE.md.
+ *
+ * SAT Hard Mode - the app: routing, rendering, storage.
  *
  * Depends on window.SATBANK (generated data) and window.SATCore (pure logic).
  * All progress lives in localStorage. An in-flight session is only in memory:
@@ -867,7 +871,11 @@
       '<li><b>Underlining and italics</b> are not captured at all, which matters for the ' +
         'handful of items that ask about an underlined portion.</li></ul>' +
       '<h4>Source-quality flags on these ' + META.count + ' items</h4>' +
-      '<p>' + flags + '</p></div>' +
+      '<p>' + flags + '</p>' +
+      '<p class="small muted">This file is generated on your machine and is not part of ' +
+        'the project repository: the question text and rationales it holds remain the ' +
+        'property of College Board. Not affiliated with or endorsed by College Board, ' +
+        'Khan Academy or any other test publisher.</p></div>' +
       '<div class="card"><h3>How mastery and review work</h3>' +
       '<p>Mastery is a 0–100 point total per skill, the same shape Khan Academy uses. A ' +
         'question answered correctly for the first time is worth <b>+' +
