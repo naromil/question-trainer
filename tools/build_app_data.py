@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build `app/data/questions.js` for the SAT trainer.
 
-Source of truth: `SAT Question Bank JSON/all.json` (gitignored, produced by the
-question-bank pipeline in `SAT Question Bank JSON/tools/`).
+Source of truth: `questions/all.json` (gitignored, produced by the
+question-bank pipeline in `questions/tools/`).
 
 This script only *selects, normalises and validates*; it never rewrites prose.
 
@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "SAT Question Bank JSON" / "all.json"
+SOURCE = ROOT / "questions" / "all.json"
 TARGET = ROOT / "app" / "data" / "questions.js"
 DIFFICULTY = "Hard"
 
@@ -164,7 +164,7 @@ def main() -> int:
     payload = OrderedDict(
         meta=OrderedDict(
             generated=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            source="SAT Question Bank JSON/all.json",
+            source="questions/all.json",
             section="Reading and Writing",
             difficulty=DIFFICULTY,
             count=len(questions),

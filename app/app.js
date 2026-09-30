@@ -835,7 +835,7 @@
       '</tbody></table>' +
       '<p class="small muted" style="margin-top:.8rem">Regenerate this data with ' +
         '<code>python3 tools/build_app_data.py</code>; the extraction pipeline lives in ' +
-        '<code>SAT Question Bank JSON/tools/</code>.</p></div>';
+        '<code>questions/tools/</code>.</p></div>';
   }
 
   /* ------------------------------------------------------------ keyboard */
