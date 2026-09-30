@@ -16,7 +16,13 @@ This script only *selects, normalises and validates*; it never rewrites prose.
     cross-checked against the 224 keyed items and any disagreement aborts;
   * strips the stray leading `-` some set names carry in the source sheets;
   * folds the OCR `Text1` / `Text 2` cross-text labels to `Text 1` / `Text 2`;
-  * derives the `underline` / `figure` caveat flags the UI warns about.
+  * for items whose bank record draws a figure, ships the bank's own markup
+    (`stimulus_html`: inline SVG chart or real table) and its exact prose as the
+    stimulus, instead of the OCR of that row, which is chart noise;
+  * derives the `underline` / `figure` caveat flags the UI warns about, scoped to
+    what the item actually renders: a figure item loses the flags that only ever
+    described the replaced OCR stimulus, and keeps `underline` only when the bank
+    markup does not show the underline itself.
 
 Run from the repo root:  python3 tools/build_app_data.py
 """
@@ -45,6 +51,15 @@ DOMAINS = [
 
 BEST_ANSWER = re.compile(r"^Choice ([A-D]) is the best answer\b\.?")
 TEXT_LABEL = re.compile(r"^Text\s?(\d+)$")
+# How the bank marks an underlined portion in its own stimulus HTML.
+UNDERLINE = re.compile(r"<u[ >]|text-decoration:\s*underline", re.I)
+# Flags that only ever described the OCR of the stimulus, plus the two that say "this
+# screenshot looks like it held a figure": for the items whose text *and* figure come
+# from the bank, none of them describes anything the app renders.
+STIMULUS_OCR_FLAGS = {
+    "ocr-disagreement", "line-repaired", "multiple-blanks", "blank-missing",
+    "stem-not-parsed", "psm3-fallback", "possible-figure", "figure-mentioned",
+}
 
 
 def recover_answer(item: dict) -> tuple[str, str]:
@@ -126,30 +141,51 @@ def main() -> int:
             raise SystemExit(f"{qid}: hard item without a rationale")
 
         body = f"{item['question']}\n{item['stimulus']}"
+        # The bank's own figure for this item: inline SVG chart or real table markup,
+        # vector-exact, where the screenshot OCR of the same row is reading-order noise.
+        figure = item.get("figure_kind")
+        html = item.get("bank_stimulus_html")
+        stimulus = item["stimulus"]
+        if figure:
+            if figure not in ("svg", "table") or not html or not item.get("bank_stimulus_text"):
+                raise SystemExit(f"{qid}: figure_kind {figure!r} without bank stimulus")
+            if re.search(r"<script|\son[a-z]+\s*=", html, re.I):
+                raise SystemExit(f"{qid}: unsanitized figure markup")
+            stimulus = item["bank_stimulus_text"]
+
         flags = sorted(set(item.get("flags") or []))
-        if "underlin" in body.lower():
+        if figure:
+            # These flags only ever described the OCR of the stimulus, which the bank's
+            # own text replaces here; `figure` says what remains true about the figure.
+            flags = [f for f in flags if f not in STIMULUS_OCR_FLAGS]
+        # `underline` drives both the caveat and the filter, so it is about what the item
+        # renders: the bank marks the referenced portion (and italics) in its own markup,
+        # which is the exception to OCR's blindness to both.
+        if "underlin" in body.lower() and not (html and UNDERLINE.search(html)):
             flags.append("underline")
-        if {"possible-figure", "figure-mentioned"} & set(flags):
+        if figure or {"possible-figure", "figure-mentioned"} & set(flags):
             flags.append("figure")
 
-        questions.append(
-            OrderedDict(
-                id=qid,
-                set=normalise_set(item["set"]),
-                skill=item["skill"],
-                domain=item["domain"],
-                number=item["number"],
-                stimulus=normalise_stimulus(item["stimulus"]),
-                stem=re.sub(r"\s+", " ", item["question"]).strip(),
-                choices=[c["text"].strip() for c in choices],
-                answer=answer,
-                analysis=re.sub(r"[ \t]+", " ", analysis).strip(),
-                flags=sorted(set(flags)),
-                source=OrderedDict(
-                    pdf=item["source"]["pdf"], page=item["source"]["page"]
-                ),
-            )
+        entry = OrderedDict(
+            id=qid,
+            set=normalise_set(item["set"]),
+            skill=item["skill"],
+            domain=item["domain"],
+            number=item["number"],
+            stimulus=normalise_stimulus(stimulus),
+            stem=re.sub(r"\s+", " ", item["question"]).strip(),
+            choices=[c["text"].strip() for c in choices],
+            answer=answer,
+            analysis=re.sub(r"[ \t]+", " ", analysis).strip(),
+            flags=sorted(set(flags)),
+            source=OrderedDict(
+                pdf=item["source"]["pdf"], page=item["source"]["page"]
+            ),
         )
+        if figure:
+            entry["figure_kind"] = figure
+            entry["stimulus_html"] = html
+        questions.append(entry)
 
     questions.sort(key=lambda q: (DOMAINS.index(q["domain"]), q["skill"], q["set"], q["id"]))
 
@@ -186,8 +222,9 @@ def main() -> int:
         "// Board question text and rationales; keep it out of every commit (.gitignore)\n"
         "// and see NOTICE.md for the content and trademark terms.\n"
         "// Hard Reading & Writing items from the SAT Question Bank JSON export.\n"
-        "// Rationale text and difficulty come from the College Board Educator\n"
-        "// Question Bank; stimulus/choices are OCR of the source screenshots.\n"
+        "// Rationale text, difficulty and figure markup come from the College Board\n"
+        "// Educator Question Bank; the rest is OCR of the source screenshots. Items\n"
+        "// with `figure_kind` carry the bank's own figure in `stimulus_html`.\n"
         "(function (root, data) {\n"
         "  if (typeof module === 'object' && module.exports) module.exports = data;\n"
         "  else root.SATBANK = data;\n"
@@ -198,7 +235,8 @@ def main() -> int:
 
     print(f"{TARGET.relative_to(ROOT)}: {len(questions)} items, "
           f"{TARGET.stat().st_size / 1024:.0f} KiB, "
-          f"{recoveries} answers recovered from rationales")
+          f"{recoveries} answers recovered from rationales, "
+          f"{sum(1 for q in questions if 'figure_kind' in q)} bank figures")
     print("\nper skill:")
     for entry in skills:
         print(f"  {entry['domain']:<28} {entry['skill']:<28} {entry['count']:>3}")

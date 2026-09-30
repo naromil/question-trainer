@@ -213,6 +213,28 @@ kbd {
   display: inline-block; min-width: 4.2em; border-bottom: 1.5px solid currentColor;
   vertical-align: baseline; height: 1em;
 }
+
+/* ------------------------------------------------------- bank figures */
+/* Charts arrive as inline SVG and tables as real markup, so both keep the bank's own
+ * geometry, labels and values. The bank draws its charts in black (strokes, text) and
+ * its tables in the page's text colour, so the figure sits on its own white card with
+ * dark text whatever the theme; on a narrow screen the card scrolls, never squashes. */
+.stimulus.has-figure .figure-credit {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-3); margin: 0 0 .4rem;
+}
+.stimulus.has-figure figure {
+  margin: 0 0 .9rem; padding: .75rem; background: #fff; color: #111;
+  border: 1px solid var(--line-2); border-radius: var(--radius-sm); overflow-x: auto;
+}
+.stimulus.has-figure figure svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.stimulus.has-figure figure caption { font-size: .9rem; font-weight: 650; padding-bottom: .5rem; }
+.stimulus.has-figure figure th {
+  text-transform: none; letter-spacing: 0; font-size: .8rem; color: #111;
+  border-bottom-color: #d8d8d8;
+}
+.stimulus.has-figure figure td { border-bottom-color: #ececec; }
+.stimulus.has-figure figure u { text-decoration-thickness: 1.5px; }
 .stem { font-size: 1.125rem; font-weight: 650; margin: .9rem 0 .8rem; }
 
 .choices { display: flex; flex-direction: column; gap: .5rem; margin: 0 0 .9rem; padding: 0; list-style: none; }

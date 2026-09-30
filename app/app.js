@@ -88,9 +88,22 @@
     return esc(text).replace(/_{4,}/g, '<span class="blank" aria-hidden="true"></span>');
   }
 
+  /* The stimulus block. Items whose bank record draws a figure carry the bank's own
+   * markup (`stimulus_html`: inline SVG chart or a real table), which is exact where the
+   * OCR of the same screenshot row is chart noise. Everything else is OCR text. */
+  function stimulusHTML(question) {
+    if (question.stimulus_html) {
+      return '<div class="stimulus has-figure">' +
+        '<p class="figure-credit">Figure from the College Board question bank' +
+        (question.figure_kind === 'table' ? ' (table)' : ' (chart)') + '</p>' +
+        question.stimulus_html + '</div>';
+    }
+    return '<div class="stimulus">' + stimulusTextHTML(question.stimulus) + '</div>';
+  }
+
   /* Stimulus text keeps the OCR line breaks: single newlines are wraps inside
    * a paragraph or bullet, blank lines separate blocks. */
-  function stimulusHTML(text) {
+  function stimulusTextHTML(text) {
     var html = '';
     text.split(/\n{2,}/).forEach(function (block) {
       var parts = [];
@@ -126,11 +139,13 @@
     return html;
   }
 
-  /* Caveat badges for source-data problems the trainer cannot fix. */
+  /* Caveat badges for source-data problems the trainer cannot fix. Items that carry the
+   * bank's own figure markup have no such problem: the stimulusHTML credit says where
+   * the figure came from. */
   function warningHTML(question) {
     var flags = question.flags || [];
     var notes = [];
-    if (flags.indexOf('figure') >= 0) {
+    if (flags.indexOf('figure') >= 0 && !question.figure_kind) {
       notes.push('refers to a graph, table or figure — chart geometry is not in the ' +
         'text data, so read the stem carefully');
     }
@@ -138,7 +153,10 @@
       notes.push('refers to an underlined portion that OCR did not capture');
     }
     if (flags.indexOf('low-confidence') >= 0 || flags.indexOf('ocr-disagreement') >= 0) {
-      notes.push('carries OCR-quality warnings (see the Data page)');
+      notes.push(question.figure_kind
+        ? 'carries OCR-quality warnings from the source screenshot — only its choices are ' +
+          'still OCR (see the Data page)'
+        : 'carries OCR-quality warnings (see the Data page)');
     }
     if (!notes.length) return '';
     return '<div class="warnbox">Source-data caveat: this item ' + esc(notes.join('; ')) +
@@ -173,7 +191,7 @@
         '<span class="choice-text">' + inline(text) + '</span></div></div>' +
         whyBlockHTML(parsed, letter) + '</li>';
     }).join('');
-    return '<div class="stimulus">' + stimulusHTML(question.stimulus) + '</div>' +
+    return stimulusHTML(question) +
       '<div class="stem">' + esc(question.stem) + '</div>' +
       '<ul class="choices">' + choices + '</ul>' +
       warningHTML(question) + fallbackRationaleHTML(question, parsed);
@@ -457,7 +475,7 @@
         '<span class="tag">' + (index + 1) + ' of ' + session.ids.length + '</span>' +
       '</div>' +
       warningHTML(question) +
-      '<div class="stimulus">' + stimulusHTML(question.stimulus) + '</div>' +
+      stimulusHTML(question) +
       '<div class="stem">' + esc(question.stem) + '</div>' +
       '<ul class="choices" id="choices">' + choices + '</ul>' +
       '<div class="actions">' +
@@ -842,6 +860,9 @@
       return '<span class="tag">' + esc(flag) + ' · ' + flagCounts[flag] + '</span>';
     }).join(' ');
 
+    var figureItems = QUESTIONS.filter(function (q) { return q.figure_kind; }).length;
+    var figureFlagged = flagCounts.figure || 0;
+
     var skills = META.skills.map(function (entry) {
       return '<tr><td>' + esc(entry.domain) + '</td><td>' + esc(entry.skill) + '</td>' +
         '<td class="num">' + entry.count + '</td><td class="muted small">' +
@@ -856,7 +877,8 @@
         '<code>' + esc(META.source) + '</code>.</p>' +
       '<ul><li><b>Question text, choices:</b> OCR (tesseract) of the original ' +
         'screenshot-per-row sheets, so the wording can carry OCR slips — each item keeps ' +
-        'its OCR warning flags below.</li>' +
+        'its OCR warning flags below. The ' + figureItems + ' figure items are the ' +
+        'exception: their text and figure come from the bank (see <i>Figures</i>).</li>' +
       '<li><b>Answer letter:</b> the official key PDFs for 224 of the items. The remaining ' +
         '29 (the whole <i>Inferences 3</i> set, whose key PDF is byte-identical to the ' +
         'question PDF) are recovered from the bank rationale, which always opens with ' +
@@ -865,11 +887,17 @@
       '<li><b>Difficulty and rationale:</b> the College Board Educator Question Bank API ' +
         '(<code>qbank-api.collegeboard.org</code>), joined on the 8-hex question id. The ' +
         'rationales are official.</li>' +
-      '<li><b>Figures:</b> bar and line chart geometry does not survive OCR. Items that ' +
-        'mention a figure carry a caveat badge; filter them out in Settings if the stem ' +
-        'is unanswerable without the chart.</li>' +
-      '<li><b>Underlining and italics</b> are not captured at all, which matters for the ' +
-        'handful of items that ask about an underlined portion.</li></ul>' +
+      '<li><b>Figures:</b> the ' + figureItems + ' items whose bank record draws one carry ' +
+        'the bank\'s own figure markup — inline SVG for bar and line charts (axis labels ' +
+        'and series values as real text, plus a long description on the graphic) and real ' +
+        'table markup for tables — with the bank\'s exact prose as the stimulus. That ' +
+        'markup is sanitized to a tag and attribute allowlist before it is injected here. ' +
+        'Chart geometry does not survive OCR, so the ' + (figureFlagged - figureItems) +
+        ' flagged items without bank markup (ids the bank does not list, or a "figure" the ' +
+        'text only names, like a periodic table) keep the OCR text and its caveat.</li>' +
+      '<li><b>Underlining and italics</b> are not captured by OCR at all, which matters ' +
+        'for the items that ask about an underlined portion; the bank markup of the figure ' +
+        'items keeps both (<code>&lt;u&gt;</code>, <code>&lt;em&gt;</code>).</li></ul>' +
       '<h4>Source-quality flags on these ' + META.count + ' items</h4>' +
       '<p>' + flags + '</p>' +
       '<p class="small muted">This file is generated on your machine and is not part of ' +

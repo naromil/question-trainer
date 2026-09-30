@@ -76,7 +76,7 @@ tests skip. Keep it, and `questions/`, out of your commits and releases; see
 
 ```bash
 python3 tools/build_app_data.py     # rebuild app/data/questions.js
-node tools/test_core.js             # 20 tests: grading, SRS, selection, data integrity
+node tools/test_core.js             # 21 tests: grading, SRS, selection, data integrity
 ```
 
 What the builder does beyond a filter:
@@ -88,7 +88,13 @@ What the builder does beyond a filter:
   224 keyed items, and the builder aborts on any disagreement — so the recovery is
   derived *and* checked, not guessed;
 * strips the stray leading `-` on four set names, folds OCR `Text1`/`Text2` labels
-  to `Text 1`/`Text 2`, and derives the `figure` / `underline` caveat flags.
+  to `Text 1`/`Text 2`, and derives the `figure` / `underline` caveat flags — for a
+  figure item only where they still describe what it renders (see the caveats below);
+* for the 21 items whose bank record draws a figure, ships the bank's own markup as
+  `stimulus_html` (inline SVG chart or real table) with the bank's exact prose as the
+  stimulus, instead of the OCR of that row — which for a chart is reading-order noise.
+  That markup comes from `questions/tools/bank.py figures` and is sanitized to a tag
+  and attribute allowlist before it is injected into the page.
 
 ### Caveats the UI shows you
 
@@ -96,11 +102,15 @@ What the builder does beyond a filter:
   wording can carry slips. Items with `low-confidence`, `ocr-disagreement`,
   `line-repaired` or recovered choice blocks are marked in the question header and
   can be filtered out.
-* **Figures.** Bar/line chart geometry does not survive OCR. The 22 items that refer
-  to a graph or table carry a caveat banner; table cell text usually survives, chart
-  axes do not.
-* **Underlining and italics** are not captured at all — the 12 items that ask about
-  an underlined portion carry a caveat banner.
+* **Figures.** Bar/line chart geometry and table structure do not survive OCR, so items
+  whose bank record draws one carry the bank's own figure: 21 of the 22 figure items in
+  this tier render an inline SVG chart or a real table, with the bank's exact prose as
+  the stimulus. The one left without (its "table" is the Round Table, so the OCR flag was
+  a false positive) keeps the OCR text and a caveat banner.
+* **Underlining and italics** are not captured by OCR — the 9 items that ask about an
+  underlined portion carry a caveat banner. The bank markup of a figure item keeps both
+  (`<u>`, `<em>`), so the 3 figure items that ask about an underlined portion show it
+  and no longer warn.
 * **Reading & Writing only.** The question bank holds no math section, so neither
   does this trainer.
 
@@ -114,7 +124,8 @@ app/core.js             pure logic: mastery, Leitner review, session selection,
                         require it directly)
 app/app.js              routing, rendering, localStorage
 app/data/questions.js   generated locally, gitignored: 253 hard items + metadata
-                        (contains College Board text — never committed)
+                        (contains College Board text and figure markup — never
+                        committed)
 tools/build_app_data.py builder (source -> app/data/questions.js)
 tools/test_core.js      node --test suite for core.js and the generated data
 NOTICE.md               copyright, content and trademark terms

@@ -83,6 +83,35 @@ dataTest('generated data: every rationale parses per choice, matching the key', 
   }
 });
 
+dataTest('generated data: bank figures are sanitized markup, not OCR noise', () => {
+  const figures = DATA.questions.filter((q) => q.figure_kind);
+  assert.ok(figures.length > 15, 'expected the hard tier to carry bank figures');
+
+  for (const q of figures) {
+    const html = q.stimulus_html;
+    const kind = q.figure_kind;
+    assert.ok(kind === 'svg' || kind === 'table', `${q.id} figure kind ${kind}`);
+    assert.equal((html.match(/<figure/g) || []).length, 1, `${q.id} one figure`);
+    assert.ok(
+      kind === 'svg' ? html.includes('<svg') && /<text[ >]/.test(html) : html.includes('<table'),
+      `${q.id} markup matches its kind`
+    );
+    if (kind === 'table') {
+      assert.ok(html.includes('<th') && html.includes('<td'), `${q.id} table cells`);
+    } else {
+      assert.ok(/aria-label="/.test(html), `${q.id} chart keeps its long description`);
+    }
+    assert.ok(!/<script|javascript:|\son[a-z]+\s*=|href=/i.test(html), `${q.id} markup sanitized`);
+    assert.ok(!/sr-only/.test(html), `${q.id} no screen-reader duplicates`);
+    assert.ok(q.stimulus.trim() && !q.stimulus.includes('<'), `${q.id} plain stimulus`);
+  }
+
+  /* A figure-bearing item is always flagged, so the Settings filter can skip it. */
+  for (const q of DATA.questions) {
+    if (q.figure_kind) assert.ok(q.flags.includes('figure'), `${q.id} figure flag`);
+  }
+});
+
 /* ---------------------------------------------------------------- grading */
 
 test('applyAnswer: first-try correct earns full mastery and schedules review', () => {
