@@ -164,8 +164,9 @@
     var choices = question.choices.map(function (text, i) {
       var letter = VERDICT[i];
       var cls = letter === question.answer ? ' is-correct' : ' dimmed';
-      return '<li><div class="choice' + cls + '"><span class="letter">' + letter +
-        '</span><span>' + inline(text) + '</span></div>' +
+      return '<li class="choice-item"><div class="choice-row is-static' + cls + '">' +
+        '<div class="choice"><span class="letter">' + letter + '</span>' +
+        '<span class="choice-text">' + inline(text) + '</span></div></div>' +
         whyBlockHTML(parsed, letter) + '</li>';
     }).join('');
     return '<div class="stimulus">' + stimulusHTML(question.stimulus) + '</div>' +
@@ -310,6 +311,7 @@
       index: 0,
       results: [],
       selected: null,
+      excluded: {},
       checked: false,
       startedAt: Date.now(),
       retry: !!preselect
@@ -402,25 +404,45 @@
     }).join('');
   }
 
-  function choiceClass(letter, index, question) {
-    var chosen = index === session.selected;
-    if (!session.checked) return 'choice' + (chosen ? ' selected' : '');
-    if (letter === question.answer) return 'choice is-correct';
-    if (chosen) return 'choice is-wrong';
-    return 'choice dimmed';
+  /* The row carries every state class; the choice button inside it chooses the
+   * answer and the trailing button is the cross-out toggle. */
+  function rowClass(letter, index, question) {
+    var cls = session.checked ? 'choice-row' : 'choice-row live';
+    if (session.excluded[index]) cls += ' is-excluded';
+    if (!session.checked) return cls + (index === session.selected ? ' selected' : '');
+    if (letter === question.answer) return cls + ' is-correct';
+    if (index === session.selected) return cls + ' is-wrong';
+    return cls + ' dimmed';
+  }
+
+  /* Bluebook's Option Eliminator ("ABC" button): cross out the choices you have
+   * ruled out. It is undoable and never changes the answer by itself. */
+  function elimHTML(index, letter) {
+    var excluded = !!session.excluded[index];
+    var label = (excluded ? 'Include' : 'Exclude') + ' choice ' + letter;
+    return '<button type="button" class="elim" data-exclude="' + index + '"' +
+      ' aria-pressed="' + (excluded ? 'true' : 'false') + '" aria-label="' + label +
+      '" title="' + label + '"><span aria-hidden="true">ABC</span></button>';
+  }
+
+  function choiceHTML(letter, index, question, text) {
+    return '<div class="' + rowClass(letter, index, question) + '">' +
+      '<button type="button" class="choice" data-i="' + index + '" aria-pressed="false">' +
+        '<span class="letter">' + letter + '</span>' +
+        '<span class="choice-text">' + inline(text) + '</span></button>' +
+      elimHTML(index, letter) + '</div>';
   }
 
   function showQuestion(index) {
     var question = BY_ID[session.ids[index]];
     session.selected = null;
     session.checked = false;
+    session.excluded = {};
     renderDots();
 
     var choices = question.choices.map(function (text, i) {
       var letter = VERDICT[i];
-      return '<li><button type="button" class="' + choiceClass(letter, i, question) +
-        '" data-i="' + i + '"><span class="letter">' + letter + '</span>' +
-        '<span>' + inline(text) + '</span></button></li>';
+      return '<li class="choice-item">' + choiceHTML(letter, i, question, text) + '</li>';
     }).join('');
 
     var card = document.getElementById('qcard');
@@ -447,18 +469,51 @@
         selectChoice(parseInt(button.getAttribute('data-i'), 10));
       });
     });
+    $$('#choices .elim').forEach(function (button) {
+      button.addEventListener('click', function () {
+        toggleExcluded(parseInt(button.getAttribute('data-exclude'), 10));
+      });
+    });
     document.getElementById('action').addEventListener('click', action);
   }
 
-  function selectChoice(index) {
-    if (session.checked) return;
-    session.selected = index;
+  /* Re-paint every row from the session state, including the cross-out buttons. */
+  function syncChoices() {
     var question = BY_ID[session.ids[session.index]];
-    $$('#choices .choice').forEach(function (button, i) {
-      button.setAttribute('aria-pressed', String(i === index));
-      button.className = choiceClass(VERDICT[i], i, question);
+    $$('#choices .choice-row').forEach(function (row, i) {
+      var letter = VERDICT[i];
+      var excluded = !!session.excluded[i];
+      var label = (excluded ? 'Include' : 'Exclude') + ' choice ' + letter;
+      row.className = rowClass(letter, i, question);
+      var choice = $('.choice', row);
+      choice.setAttribute('aria-pressed', String(i === session.selected));
+      choice.disabled = session.checked;
+      var elim = $('.elim', row);
+      elim.disabled = session.checked;
+      elim.setAttribute('aria-pressed', String(excluded));
+      elim.setAttribute('aria-label', label);
+      elim.setAttribute('title', label);
     });
-    document.getElementById('action').disabled = false;
+    document.getElementById('action').disabled = session.selected == null;
+  }
+
+  function selectChoice(index) {
+    /* A crossed-out choice is out of the running; undo the cross-out first. */
+    if (session.checked || session.excluded[index]) return;
+    session.selected = index;
+    syncChoices();
+  }
+
+  /* Crossing out is a note to self, so a choice can never be both chosen and
+   * crossed out: excluding the selected choice clears the selection. */
+  function toggleExcluded(index) {
+    if (session.checked) return;
+    if (session.excluded[index]) delete session.excluded[index];
+    else {
+      session.excluded[index] = true;
+      if (session.selected === index) session.selected = null;
+    }
+    syncChoices();
   }
 
   function action() {
@@ -489,11 +544,9 @@
     renderPills();
 
     var parsed = C.parseRationale(question.analysis, question.answer);
-    $$('#choices .choice').forEach(function (button, i) {
-      var letter = VERDICT[i];
-      button.disabled = true;
-      button.className = choiceClass(letter, i, question);
-      button.parentNode.insertAdjacentHTML('beforeend', whyBlockHTML(parsed, letter));
+    syncChoices();
+    $$('#choices .choice-item').forEach(function (item, i) {
+      item.insertAdjacentHTML('beforeend', whyBlockHTML(parsed, VERDICT[i]));
     });
 
     var last = session.index === session.ids.length - 1;
@@ -843,6 +896,8 @@
     if (parseHash().path !== '/practice' || !session || session.index >= session.ids.length) return;
     var tag = (event.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+    /* Enter/Space on a cross-out button toggles it; it must not check the answer. */
+    if (event.target.classList && event.target.classList.contains('elim')) return;
 
     if (event.key === 'Enter' || event.key === ' ') {
       if (session.checked || session.selected != null) {

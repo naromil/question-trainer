@@ -215,26 +215,57 @@ kbd {
 .stem { font-size: 1.125rem; font-weight: 650; margin: .9rem 0 .8rem; }
 
 .choices { display: flex; flex-direction: column; gap: .5rem; margin: 0 0 .9rem; padding: 0; list-style: none; }
-.choice {
-  display: flex; gap: .7rem; align-items: flex-start; width: 100%; text-align: left;
-  font: inherit; font-size: 1.25rem; color: var(--ink); background: var(--card);
-  border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
-  padding: .7rem .8rem; cursor: pointer;
+/* The row owns the border/background so the cross-out button can sit inside it. */
+.choice-row {
+  display: flex; align-items: stretch;
+  background: var(--card); border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
 }
-.choice:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-soft); }
+.choice-row.live:hover { border-color: var(--blue); background: var(--blue-soft); }
+.choice {
+  display: flex; flex: 1; gap: .7rem; align-items: flex-start; min-width: 0;
+  text-align: left; font: inherit; font-size: 1.25rem; color: var(--ink);
+  background: none; border: 0; border-radius: var(--radius-sm);
+  padding: .7rem .3rem .7rem .8rem; cursor: pointer;
+}
 .choice .letter {
   flex: 0 0 1.7rem; height: 1.7rem; display: grid; place-items: center;
   border: 1.5px solid var(--line-2); border-radius: 50%; font-weight: 650; font-size: .85rem;
 }
 .choice .letter kbd { all: unset; }
-.choice.selected { border-color: var(--blue); background: var(--blue-soft); }
-.choice.selected .letter { border-color: var(--blue); background: var(--blue); color: #fff; }
-.choice.is-correct { border-color: var(--green); background: var(--green-soft); }
-.choice.is-correct .letter { border-color: var(--green); background: var(--green); color: #fff; }
-.choice.is-wrong { border-color: var(--red); background: var(--red-soft); }
-.choice.is-wrong .letter { border-color: var(--red); background: var(--red); color: #fff; }
-.choice.dimmed { opacity: .55; }
+.choice-row.selected { border-color: var(--blue); background: var(--blue-soft); }
+.choice-row.selected .letter { border-color: var(--blue); background: var(--blue); color: #fff; }
+.choice-row.is-correct { border-color: var(--green); background: var(--green-soft); }
+.choice-row.is-correct .letter { border-color: var(--green); background: var(--green); color: #fff; }
+.choice-row.is-wrong { border-color: var(--red); background: var(--red-soft); }
+.choice-row.is-wrong .letter { border-color: var(--red); background: var(--red); color: #fff; }
+.choice-row.dimmed { opacity: .55; }
 .choice:disabled { cursor: default; }
+.choice-row.is-static .choice { cursor: default; }
+
+/* --------------------------------------------------- option eliminator (ABC) */
+/* Bluebook's "cross out the choices you ruled out": the button is undoable and
+   the crossed-out option can no longer be picked. */
+.elim {
+  flex: 0 0 auto; align-self: center; position: relative;
+  width: 2.3rem; height: 2.3rem; margin: .45rem .5rem .45rem .2rem;
+  display: grid; place-items: center; cursor: pointer;
+  font: inherit; font-size: .6rem; font-weight: 700; letter-spacing: .02em;
+  color: var(--ink-3); background: none;
+  border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
+}
+.elim span { position: relative; }
+.elim:hover:not(:disabled) { color: var(--red); border-color: var(--red); }
+.elim[aria-pressed="true"] {
+  color: var(--red); border-color: var(--red); background: var(--red-soft);
+}
+.elim[aria-pressed="true"] span::after {
+  content: ""; position: absolute; left: -8%; right: -8%; top: 50%;
+  height: 1.5px; background: currentColor; transform: rotate(-24deg);
+}
+.elim:disabled { opacity: .45; cursor: default; }
+.choice-row.is-excluded .choice-text,
+.choice-row.is-excluded .letter { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+.choice-row.is-excluded .choice-text { color: var(--ink-3); }
 
 .verdict {
   display: flex; align-items: center; gap: .5rem; font-weight: 650; margin-bottom: .6rem;
@@ -305,4 +336,5 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .wrap { padding: 1rem .7rem 2.5rem; }
   .card { padding: .9rem; }
   .kbdhint { display: none; }
+  .elim { width: 2rem; height: 2rem; margin-right: .4rem; }
 }
