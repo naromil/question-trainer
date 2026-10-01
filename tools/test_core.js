@@ -288,7 +288,15 @@ test('sanitizeState: junk imports become a usable empty state', () => {
     assert.equal(state.totals.a, 0);
     assert.deepEqual(state.q, {});
     assert.equal(state.settings.length, 4);
+    assert.equal(state.settings.sound, true, 'answer sounds default on');
   }
+});
+
+test('sanitizeState: an explicit sound=false survives a round trip', () => {
+  const off = C.sanitizeState({ settings: { sound: false } }, NOW);
+  assert.equal(off.settings.sound, false);
+  assert.equal(C.sanitizeState(JSON.parse(JSON.stringify(off)), NOW).settings.sound, false);
+  assert.equal(C.sanitizeState({ settings: { sound: 'yes' } }, NOW).settings.sound, true);
 });
 
 test('sanitizeState: clamps nonsense records instead of trusting them', () => {

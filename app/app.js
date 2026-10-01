@@ -82,6 +82,61 @@
     document.documentElement.setAttribute('data-theme', state.settings.theme || 'auto');
   }
 
+  /* ------------------------------------------------------ feedback effects */
+  /* Right and wrong are signalled twice: a one-shot animation on the question
+   * card, and a short synthesised tone. The tone is generated with WebAudio,
+   * so there are no audio assets to ship, and it is only ever created from the
+   * answer click (a user gesture), which is also what autoplay policy wants.
+   * Settings can mute it; motion follows prefers-reduced-motion in the CSS. */
+  var audioCtx = null;
+  var hasAudioCtx = false;
+
+  function audio() {
+    if (hasAudioCtx) return audioCtx;
+    hasAudioCtx = true;
+    var Ctor = window.AudioContext || window.webkitAudioContext;
+    try { audioCtx = Ctor ? new Ctor() : null; } catch (err) { audioCtx = null; }
+    return audioCtx;
+  }
+
+  /* One enveloped note; `at` is an absolute AudioContext time. */
+  function note(ctx, freq, at, dur, type, peak) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, at);
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(peak, at + 0.012);
+    gain.gain.setValueAtTime(peak, at + dur - 0.05);
+    gain.gain.linearRampToValueAtTime(0, at + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(at);
+    osc.stop(at + dur + 0.02);
+  }
+
+  function playVerdict(correct) {
+    if (!state.settings.sound) return;
+    var ctx = audio();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume();
+    var at = ctx.currentTime + 0.01;
+    if (correct) {
+      note(ctx, 660, at, 0.12, 'sine', 0.08);
+      note(ctx, 990, at + 0.11, 0.16, 'sine', 0.08);
+    } else {
+      note(ctx, 196, at, 0.17, 'square', 0.05);
+      note(ctx, 147, at + 0.13, 0.22, 'square', 0.05);
+    }
+  }
+
+  /* The card carries the effect class for one animation; showQuestion drops it
+   * again, so the same node can replay it on the next question. */
+  function flashCard(correct) {
+    var card = document.getElementById('qcard');
+    if (card) card.classList.add(correct ? 'fx-correct' : 'fx-wrong');
+  }
+
   /* ------------------------------------------------------------ stimulus */
   /* Escape first, then turn the OCR blank rules into a visible blank. */
   function inline(text) {
@@ -224,6 +279,40 @@
     if (timer) { clearInterval(timer); timer = null; }
   }
 
+  /* The session clock measures answering time: it runs while a question is
+   * open and stops the moment the answer is graded, so reading the rationale
+   * never counts. `elapsed` holds the accumulated milliseconds. */
+  function elapsedMs() {
+    if (!session) return 0;
+    return session.elapsed + (session.runningSince ? Date.now() - session.runningSince : 0);
+  }
+
+  function paintTimer() {
+    var el = document.getElementById('timer');
+    if (!el) return;
+    var paused = !(session && session.runningSince);
+    el.textContent = (paused ? '⏸ ' : '') + fmtTime(elapsedMs());
+    el.classList.toggle('is-paused', paused);
+    el.title = paused ? 'Paused while you review this answer' : 'Time spent answering';
+  }
+
+  function resumeTimer() {
+    if (!session || session.runningSince) return;
+    session.runningSince = Date.now();
+    stopTimer();
+    paintTimer();
+    timer = setInterval(paintTimer, 1000);
+  }
+
+  function pauseTimer() {
+    if (session && session.runningSince) {
+      session.elapsed += Date.now() - session.runningSince;
+      session.runningSince = null;
+    }
+    stopTimer();
+    paintTimer();
+  }
+
   /* ------------------------------------------------------------ routing */
   function parseHash() {
     var raw = location.hash.replace(/^#/, '') || '/';
@@ -235,7 +324,7 @@
   }
 
   function render() {
-    stopTimer();
+    pauseTimer();
     var route = parseHash();
     setActiveNav(route.path);
     renderPills();
@@ -335,7 +424,8 @@
       selected: null,
       excluded: {},
       checked: false,
-      startedAt: Date.now(),
+      elapsed: 0,
+      runningSince: null,
       retry: !!preselect
     };
     if (session.ids.length) {
@@ -391,19 +481,7 @@
         '<div class="card" id="qcard"></div>' +
       '</div>';
 
-    startTimer();
     showQuestion(session.index);
-  }
-
-  function startTimer() {
-    stopTimer();
-    var el = document.getElementById('timer');
-    if (!el) return;
-    var tick = function () {
-      el.textContent = fmtTime(Date.now() - session.startedAt);
-    };
-    tick();
-    timer = setInterval(tick, 1000);
   }
 
   function resultAt(index) {
@@ -468,6 +546,7 @@
     }).join('');
 
     var card = document.getElementById('qcard');
+    card.className = 'card';
     card.innerHTML =
       '<div class="q-meta">' +
         '<span class="tag">' + esc(question.skill) + '</span>' +
@@ -497,6 +576,7 @@
       });
     });
     document.getElementById('action').addEventListener('click', action);
+    resumeTimer();
   }
 
   /* Re-paint every row from the session state, including the cross-out buttons. */
@@ -548,6 +628,7 @@
     var question = BY_ID[session.ids[session.index]];
     var result = C.applyAnswer(state, question, session.selected, Date.now());
     session.checked = true;
+    pauseTimer();
 
     var record = {
       index: session.index,
@@ -599,6 +680,8 @@
         '</div>' +
       '</div>';
     renderDots();
+    flashCard(result.correct);
+    playVerdict(result.correct);
   }
 
   function nextQuestion() {
@@ -610,7 +693,7 @@
   }
 
   function renderResults() {
-    stopTimer();
+    pauseTimer();
     var results = session.results.slice().sort(function (a, b) { return a.index - b.index; });
     var correct = results.filter(function (r) { return r.correct; }).length;
     var missed = results.filter(function (r) { return !r.correct; });
@@ -646,7 +729,7 @@
         '</span></div>' + staticQuestionHTML(question) + '</div>';
     }).join('');
 
-    var time = fmtTime(Date.now() - session.startedAt);
+    var time = fmtTime(elapsedMs());
 
     appEl.innerHTML =
       '<div class="card"><div class="spread"><h1>Session complete</h1>' +
@@ -761,6 +844,11 @@
           return '<option value="' + theme + '"' +
             (state.settings.theme === theme ? ' selected' : '') + '>' + theme + '</option>';
         }).join('') + '</select></label>' +
+      '<h4 style="margin-top:1.1rem">Feedback</h4>' +
+      '<label class="field"><input type="checkbox" id="s-sound"' +
+        (state.settings.sound ? ' checked' : '') + '> Sound effect on a correct and on a ' +
+        'wrong answer <span class="muted small">(right and wrong also flash the card; the ' +
+        'clock pauses while you read the feedback either way)</span></label>' +
       '<h4 style="margin-top:1.1rem">Question filters</h4>' +
       '<p class="muted small">Items are excluded from every session (practice, review and ' +
         'drills) when a filter is on.</p>' +
@@ -798,6 +886,12 @@
       state.settings.theme = event.target.value;
       applyTheme();
       saveState();
+    });
+    $('#s-sound').addEventListener('change', function (event) {
+      state.settings.sound = event.target.checked;
+      saveState();
+      /* Switching it on plays the chime once, so the setting proves itself. */
+      if (state.settings.sound) playVerdict(true);
     });
     [['f-figure', 'excludeFigure'], ['f-underline', 'excludeUnderline'],
       ['f-risky', 'excludeRisky']].forEach(function (pair) {

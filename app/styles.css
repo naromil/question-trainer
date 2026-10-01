@@ -119,6 +119,7 @@ kbd {
   background: var(--card-2); border: 1px solid var(--line); border-radius: 999px;
   padding: .15rem .55rem; font-size: .78rem; color: var(--ink-2); white-space: nowrap;
 }
+.pill.is-paused { color: var(--ink-3); border-style: dashed; }
 
 .wrap { max-width: 1000px; margin: 0 auto; padding: 1.4rem 1rem 3rem; }
 .wrap:focus { outline: none; }
@@ -242,6 +243,7 @@ kbd {
 .choice-row {
   display: flex; align-items: stretch;
   background: var(--card); border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
+  transition: background .18s, border-color .18s;
 }
 .choice-row.live:hover { border-color: var(--blue); background: var(--blue-soft); }
 .choice {
@@ -302,6 +304,34 @@ kbd {
 .feedback.correct .icon { background: var(--green); }
 .feedback.incorrect { border-color: var(--red); }
 .feedback.incorrect .icon { background: var(--red); }
+
+/* --------------------------------------------------------- verdict effects */
+/* One-shot answer feedback: a ring pulse around the card for a hit, a shake for
+   a miss, and the verdict icon popping in either way. showQuestion drops the
+   effect class, so the same card node replays it on the next question. */
+@keyframes fx-ring {
+  from { box-shadow: var(--shadow), 0 0 0 0 var(--green-soft); }
+  to { box-shadow: var(--shadow), 0 0 0 14px transparent; }
+}
+@keyframes fx-shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-6px); }
+  35% { transform: translateX(5px); }
+  55% { transform: translateX(-3px); }
+  75% { transform: translateX(2px); }
+}
+@keyframes fx-pop {
+  from { transform: scale(.35); opacity: 0; }
+  60% { transform: scale(1.12); opacity: 1; }
+  to { transform: scale(1); opacity: 1; }
+}
+#qcard.fx-correct { animation: fx-ring .55s ease-out; }
+#qcard.fx-wrong { animation: fx-shake .4s ease-out; }
+.verdict .icon { animation: fx-pop .3s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  #qcard.fx-correct, #qcard.fx-wrong, .verdict .icon { animation: none; }
+}
 .choice-why {
   font-size: 1rem; color: var(--ink-2);
   padding: .35rem .8rem .15rem 3.2rem;

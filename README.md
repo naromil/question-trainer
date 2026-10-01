@@ -32,10 +32,10 @@ Progress lives in `localStorage`, so pick one origin and stay on it. Use
 | Screen | What you get |
 |---|---|
 | **Practice** (home) | 10 skills grouped by domain, each with a mastery bar, tier, seen/attempted counts, first-try accuracy and due count. Buttons: **Practice** (that skill, least-seen first), **Review** (that skill's due questions), **Mixed drill** (weakest skills first). Top-level buttons: mixed practice, review due, weakest skills. |
-| **Session** | One question at a time with progress dots and a session timer. Click a choice (or press <kbd>A</kbd>–<kbd>D</kbd>/<kbd>1</kbd>–<kbd>4</kbd>), <kbd>Enter</kbd> to check, <kbd>Enter</kbd> again for the next question. Every choice ends with a Bluebook-style **ABC** button that crosses the choice out (and un-crosses it again); a crossed-out choice is struck through and cannot be picked, and the cross-outs reset on the next question. Feedback shows the verdict, *why the right choice is right*, *why your choice is wrong*, a collapsible full explanation, the mastery change, and when the item returns. |
+| **Session** | One question at a time with progress dots and a session timer that counts answering time only — it stops the moment the answer is graded and resumes on the next question (the pill shows ⏸ meanwhile), so reading the rationale never inflates it. Click a choice (or press <kbd>A</kbd>–<kbd>D</kbd>/<kbd>1</kbd>–<kbd>4</kbd>), <kbd>Enter</kbd> to check, <kbd>Enter</kbd> again for the next question. Every choice ends with a Bluebook-style **ABC** button that crosses the choice out (and un-crosses it again); a crossed-out choice is struck through and cannot be picked, and the cross-outs reset on the next question. Feedback shows the verdict, *why the right choice is right*, *why your choice is wrong*, a collapsible full explanation, the mastery change, and when the item returns. A correct answer pulses the card green and plays a two-note chime, a miss shakes it red and plays a low buzz — the sound has a Settings switch, and the animation follows `prefers-reduced-motion`. |
 | **Results** | Score, mastery deltas per skill, a question-by-question log, the full rationale for every miss, and **Retry the N missed questions**. |
 | **Progress** | Answers given, first-try accuracy, questions seen, skills mastered, day streak, due now, a 14-day activity chart, a per-skill table, and your repeat **trouble spots** with the whole question and explanation inline. |
-| **Settings** | Session length (4/8/12/20), theme (auto/light/dark), question filters, export/import/reset progress. |
+| **Settings** | Session length (4/8/12/20), theme (auto/light/dark), answer sounds on/off, question filters, export/import/reset progress. |
 | **Data** | Provenance of every field, plus the per-flag counts behind each caveat. |
 
 ### Mastery
@@ -76,7 +76,7 @@ tests skip. Keep it, and `questions/`, out of your commits and releases; see
 
 ```bash
 python3 tools/build_app_data.py     # rebuild app/data/questions.js
-node tools/test_core.js             # 21 tests: grading, SRS, selection, data integrity
+node tools/test_core.js             # 22 tests: grading, SRS, selection, state import, data integrity
 ```
 
 What the builder does beyond a filter:

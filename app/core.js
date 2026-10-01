@@ -85,7 +85,8 @@
         excludeFigure: false,
         excludeRisky: false,
         excludeUnderline: false,
-        theme: 'auto'
+        theme: 'auto',
+        sound: true
       },
       totals: { a: 0, c: 0, sessions: 0 }
     };
@@ -145,6 +146,8 @@
       state.settings.theme = ['auto', 'light', 'dark'].indexOf(raw.settings.theme) >= 0
         ? raw.settings.theme
         : 'auto';
+      /* Pre-sound exports have no such key and should come back audible. */
+      state.settings.sound = raw.settings.sound !== false;
     }
 
     if (raw.totals && typeof raw.totals === 'object') {
