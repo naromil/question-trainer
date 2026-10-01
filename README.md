@@ -129,14 +129,17 @@ app/data/questions.js   generated locally, gitignored: 253 hard items + metadata
 tools/build_app_data.py builder (source -> app/data/questions.js)
 tools/test_core.js      node --test suite for core.js and the generated data
 NOTICE.md               copyright, content and trademark terms
+LICENSE                 MIT licence for this repository's original code and docs
 ```
 
 ## Copyright and content
 
-Copyright © 2026 naromil. All rights reserved.
+Copyright © 2026 naromil.
 
-This repository distributes original code and documentation only: the question material
-the trainer reads stays on your machine and out of git. SAT, Bluebook and College Board
-are trademarks of College Board, and Khan Academy is a trademark of Khan Academy, Inc.
-This project is not affiliated with, endorsed by or sponsored by any of them. See
-[NOTICE.md](NOTICE.md) for the full content, trademark and redistribution terms.
+The original code, styles, tooling and documentation in this repository are released
+under the [MIT Licence](LICENSE). That licence covers this repository's own work only:
+the question material the trainer reads is not distributed here at all — it stays on your
+machine and out of git. SAT, Bluebook and College Board are trademarks of College Board,
+and Khan Academy is a trademark of Khan Academy, Inc. This project is not affiliated with,
+endorsed by or sponsored by any of them. See [NOTICE.md](NOTICE.md) for the content and
+trademark terms.
