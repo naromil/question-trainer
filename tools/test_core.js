@@ -1,4 +1,5 @@
-/* Copyright (c) 2026 naromil. All rights reserved.
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 naromil
  * No College Board question content is distributed with this repository; see NOTICE.md.
  *
  * Tests for the trainer's logic and generated data.  Run:  node tools/test_core.js

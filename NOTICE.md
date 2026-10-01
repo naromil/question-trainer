@@ -1,10 +1,11 @@
 # Copyright and content notice
 
-Copyright © 2026 naromil. All rights reserved.
+Copyright © 2026 naromil. The original code, styles, tooling and documentation in this
+repository are released under the **MIT Licence** — see [LICENSE](LICENSE).
 
-The source code, styles, tooling and documentation in this repository are the original
-work of the repository author. No licence is granted except by explicit written
-permission; a fork is fine, redistribution of the code as your own is not.
+That licence covers this repository's own work only, and grants no rights in any question
+material (none is distributed here; see below). A fork is fine: keep your copy of the
+licence notice and, like this repository, keep the question data out of version control.
 
 ## No SAT question content is distributed here
 

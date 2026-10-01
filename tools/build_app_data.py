@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 naromil. All rights reserved.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 naromil
 # No College Board question content is distributed with this repository: the file this
 # script writes, app/data/questions.js, is gitignored and local-only. See NOTICE.md.
 """Build `app/data/questions.js` for the SAT trainer.
