@@ -125,7 +125,7 @@ test('applyAnswer: first-try correct earns full mastery and schedules review', (
   assert.equal(state.skills[q.skill].points, C.MASTERY.firstCorrect);
   assert.equal(result.boxAfter, 1);
   assert.equal(state.q.a.due, NOW + 1 * DAY);
-  assert.deepEqual(state.q.a, { a: 1, c: 1, box: 1, due: NOW + DAY, last: NOW });
+  assert.deepEqual(state.q.a, { a: 1, c: 1, f: 1, box: 1, due: NOW + DAY, last: NOW });
   assert.deepEqual(C.activity(state, 1, NOW)[0], {
     date: C.dayKey(NOW), a: 1, c: 1
   });
@@ -374,6 +374,38 @@ test('skillStats and overallStats agree with the recorded answers', () => {
   assert.equal(overall.bankSize, 3);
   assert.equal(overall.due, 1);
   assert.equal(overall.sessions, 0);
+});
+
+test('first-try accuracy counts the first answer, not eventual correctness', () => {
+  const pool = [question({ id: 'q1' }), question({ id: 'q2' })];
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, pool[0], 0, NOW);  // wrong on the first try
+  C.applyAnswer(state, pool[0], 1, NOW);  // retried to correct
+  C.applyAnswer(state, pool[1], 1, NOW);  // right on the first try
+
+  const [row] = C.skillStats(state, pool, NOW);
+  assert.equal(row.attempted, 2);
+  assert.equal(row.correct, 2, 'both questions have been answered right by now');
+  assert.equal(row.correctFirstTry, 1, 'only q2 was right on the first attempt');
+  assert.equal(row.accuracy, 50);
+  assert.equal(C.overallStats(state, pool, NOW).accuracy, 50);
+});
+
+test('sanitizeState: recovers first-try from legacy records only when certain', () => {
+  const state = C.sanitizeState({
+    q: {
+      singleRight: { a: 1, c: 1 },
+      singleWrong: { a: 1, c: 0 },
+      allRight: { a: 2, c: 2 },
+      recovered: { a: 3, c: 1 },
+      flagged: { a: 3, c: 2, f: 1 }
+    }
+  }, NOW);
+  assert.equal(state.q.singleRight.f, 1);
+  assert.equal(state.q.singleWrong.f, 0);
+  assert.equal(state.q.allRight.f, 1, 'every attempt right means the first was too');
+  assert.equal(state.q.recovered.f, 0, 'a lost first answer is not assumed correct');
+  assert.equal(state.q.flagged.f, 1, 'an explicit flag is trusted over inference');
 });
 
 test('troubleSpots lists repeated misses, worst first', () => {

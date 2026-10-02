@@ -105,9 +105,15 @@
         if (!rec || typeof rec !== 'object') return;
         var attempts = Math.max(0, rec.a | 0);
         if (!attempts) return;
+        var correct = clamp(rec.c | 0, 0, attempts);
         state.q[id] = {
           a: attempts,
-          c: clamp(rec.c | 0, 0, attempts),
+          c: correct,
+          /* Exports predating `f` lose the first answer as soon as a question
+           * has both a right and a wrong attempt. What survives: an all-correct
+           * record (c === a) was right from the start, and a mixed or all-wrong
+           * one cannot be assumed correct, so it counts as not-first-try. */
+          f: rec.f === 0 || rec.f === 1 ? rec.f : (correct === attempts ? 1 : 0),
           box: clamp(rec.box | 0, 0, SRS_LAST_BOX),
           due: typeof rec.due === 'number' ? rec.due : now,
           last: typeof rec.last === 'number' ? rec.last : now
@@ -184,6 +190,10 @@
     var rec = {
       a: (before ? before.a : 0) + 1,
       c: (before ? before.c : 0) + (correct ? 1 : 0),
+      /* f: 1 when this question's very first answer was right, else 0. Stored
+       * rather than derived: later retries inflate `c`, so "ever correct" is a
+       * different (wrong) thing from "right on the first try". */
+      f: before ? (before.f ? 1 : 0) : (correct ? 1 : 0),
       box: boxAfter,
       due: now + SRS_INTERVALS_DAYS[boxAfter] * DAY_MS,
       last: now
@@ -460,7 +470,7 @@
       if (rec && rec.a > 0) {
         row.attempted += 1;
         row.correct += rec.c;
-        if (rec.c > 0) row.correctFirstTry += 1;
+        row.correctFirstTry += rec.f;
         row.boxed += 1;
         if (rec.due <= now) row.due += 1;
       }
@@ -481,10 +491,18 @@
     var stats = skillStats(state, questions, now);
     var answered = state.totals.a;
     var rows = stats.filter(function (row) { return row.attempted > 0; });
+    var attempted = 0;
+    var firstTry = 0;
+    rows.forEach(function (row) {
+      attempted += row.attempted;
+      firstTry += row.correctFirstTry;
+    });
     return {
       answered: answered,
       correct: state.totals.c,
-      accuracy: answered ? Math.round((state.totals.c / answered) * 100) : 0,
+      /* Share of questions whose first answer was right — not the share of all
+       * answers that were right, which retries drag down. */
+      accuracy: attempted ? Math.round((firstTry / attempted) * 100) : 0,
       sessions: state.totals.sessions,
       mastered: stats.filter(function (r) { return r.tier.key === 'mastered'; }).length,
       proficient: stats.filter(function (r) { return r.tier.key === 'proficient'; }).length,

@@ -259,7 +259,7 @@
     pillsEl.innerHTML =
       '<span class="pill" title="Questions answered at least once">' +
         stats.seen + '/' + stats.bankSize + ' seen</span>' +
-      '<span class="pill" title="First-answer accuracy across all attempts">' +
+      '<span class="pill" title="Questions answered right on the first attempt">' +
         stats.accuracy + '% right</span>' +
       (stats.streak ? '<span class="pill" title="Consecutive days with practice">' +
         plural(stats.streak, 'day') + ' streak</span>' : '') +
