@@ -396,10 +396,18 @@ def dom_home_cards() -> str:
         # The archive tab sits between Progress and Settings.
         nav = re.search(r'<nav class="nav" id="nav">([\s\S]*?)</nav>', dom)
         need(nav is not None, "no nav element rendered")
-        labels = re.findall(r'data-route="/[^"]*">([^<]+)</a>', nav.group(1))
-        need(labels == ["Sets", "Progress", "Archive", "Settings", "Format"],
-             f"nav order is {labels}")
-        return f"{len(cards)} cards, nav {' / '.join(labels)}"
+        assert nav is not None
+        pairs = []
+        for attrs, label in re.findall(r'<a\b([^>]*)>([\s\S]*?)</a>', nav.group(1)):
+            route = re.search(r'data-route="([^"]*)"', attrs)
+            if route is None:
+                continue
+            pairs.append((route.group(1), re.sub(r'<[^>]+>', '', label).strip()))
+        need([label for _, label in pairs] == ["Sets", "Progress", "Archive", "Settings", "Format"],
+             f"nav order is {[label for _, label in pairs]}")
+        need([route for route, _ in pairs] == ["/", "/stats", "/archive", "/settings", "/format"],
+             f"nav targets are {[route for route, _ in pairs]}")
+        return f"{len(cards)} cards, nav {' / '.join(label for _, label in pairs)}"
 
 
 @check("settings page: 10 per session by default and the practice-all switch")

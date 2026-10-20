@@ -348,16 +348,8 @@
     /* Practice belongs to the set list, not to its own nav entry. */
     var active = path === '/practice' ? '/' : path;
     $$('#nav a').forEach(function (link) {
-      var route = link.getAttribute('data-route');
-      if (route === active) {
-        link.setAttribute('aria-current', 'page');
-        /* Keep data-route as the final attribute so the rendered link stays
-         * simple to parse (the route value immediately precedes the label). */
-        link.removeAttribute('data-route');
-        link.setAttribute('data-route', route);
-      } else {
-        link.removeAttribute('aria-current');
-      }
+      if (link.getAttribute('data-route') === active) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
     });
   }
 
