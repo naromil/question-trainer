@@ -19,8 +19,8 @@
     </a>
     <nav class="nav" id="nav">
       <a href="#/" data-route="/">Sets</a>
-      <a href="#/archive" data-route="/archive">Archive</a>
       <a href="#/stats" data-route="/stats">Progress</a>
+      <a href="#/archive" data-route="/archive">Archive</a>
       <a href="#/settings" data-route="/settings">Settings</a>
       <a href="#/format" data-route="/format">Format</a>
     </nav>
@@ -32,8 +32,9 @@
   <div id="app"></div>
 </main>
 <footer class="foot">
-  <p>Questions come from <code>questions/sets.json</code>. Progress and archived sets
-  are stored in this browser only. <a href="#/format">JSON format</a>.</p>
+  <p>Questions come from <code>questions/index.json</code>. Progress and archived sets
+  live in this browser and, when served with <code>./qt</code>, are mirrored to disk.
+  <a href="#/format">JSON format</a>.</p>
 </footer>
 <script src="core.js"></script>
 <script src="app.js"></script>

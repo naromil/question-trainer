@@ -5,33 +5,52 @@ A local-first, set-based multiple-choice trainer. Drop a fixed-format JSON file 
 grading, per-choice explanations, mastery tracking, spaced review, and an archive for
 sets you have finished.
 
-No build step, no dependencies, no server-side code: a static page plus
-`questions/sets.json`.
+No build step and no runtime dependencies: a static page plus one JSON file per
+set under `questions/`.
 
 ## Run it
 
-The app fetches its question file, so serve the repository root over HTTP rather than
-opening the HTML from disk:
+From the repository root:
 
 ```bash
-python3 -m http.server 8765
-# then open http://127.0.0.1:8765/app/
+./qt
 ```
 
-Progress and archived sets live in `localStorage`, so pick one origin and stay on it.
-Use **Settings → Export/Import JSON** to move progress between machines or origins.
+`qt` starts the stdlib server, serves the repository at
+`http://127.0.0.1:8765/app/`, and opens that URL in your browser. Progress is
+written to `progress/progress.json` (git-ignored) as well as to `localStorage`,
+so it survives a browser-data wipe and a server restart.
+
+```bash
+./qt --port 9000 --no-open          # another port; do not open a browser
+./qt --host 0.0.0.0                 # listen on all interfaces
+./qt --progress /tmp/qt-progress.json
+```
+
+`--progress` may be absolute, or relative to the repository root; the default is
+`progress/progress.json`. `--host` defaults to `127.0.0.1` and `--port` to
+`8765`. `python3 serve.py` accepts the same flags.
+
+The page still works from a plain static server (for example
+`python3 -m http.server 8765` with `http://127.0.0.1:8765/app/`) or when opened
+from disk where the browser allows it. In that mode the progress API is not
+available, so everything stays in `localStorage`; **Settings → Progress data**
+says which mode is active.
+
+Use **Settings → Export/Import JSON** to move progress between machines or
+origins.
 
 ## What it does
 
 | Screen | What you get |
 |---|---|
-| **Sets** (home) | One card per active question set: mastery bar, tier, answered count, first-try accuracy and due count. Buttons: **Practice**, **Review**, **Archive**. There is no mixed practice. |
+| **Sets** (home) | One card per active question set: mastery bar, tier, answered count, first-try accuracy and due count. Click a card to start practising the set; the due badge opens spaced review for what is due, and **Archive** stays a separate button. There is no mixed practice. |
 | **Session** | One set only. One question at a time with progress dots and an answering-time clock that pauses while you read feedback. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Choices can be crossed out (and un-crossed) before answering. |
 | **Results** | Score, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions**. |
-| **Archive** | Sets you archived, with their progress and a saved copy of their questions. **Restore** puts a set back on the active list. If the set is no longer in `questions/sets.json`, the saved copy is kept as a browser-local set. |
+| **Archive** | Sets you archived, with their progress and a saved copy of their questions. **Restore** puts a set back on the active list. If the set is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
 | **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count, a 14-day activity chart, a per-set table, and repeated trouble spots. |
-| **Settings** | Session length, theme, answer sounds, export/import/reset. |
-| **Format** | The complete `questions/sets.json` schema with an example. |
+| **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. |
+| **Format** | The in-app schema summary with an example; the full reference is [questions/README.md](questions/README.md). |
 
 ### Mastery
 
@@ -52,43 +71,23 @@ and makes it due immediately. Gaps between reviews: **1, 3, 7, 21** days.
 
 ## Question data
 
-`questions/sets.json` is read at startup:
+`questions/index.json` lists the set files by bare name:
 
 ```json
-{
-  "sets": [
-    {
-      "id": "example-set",
-      "title": "Example Set",
-      "description": "Optional one-line description.",
-      "questions": [
-        {
-          "id": "q1",
-          "passage": "Optional context or passage.",
-          "question": "What is the capital of Australia?",
-          "choices": ["Sydney", "Canberra", "Melbourne", "Perth"],
-          "answer": 1,
-          "explanation": "Canberra is the capital of Australia.",
-          "explanations": [
-            "Sydney is the largest city, but it is not the capital.",
-            "Correct. Canberra is the capital.",
-            "Melbourne is a large city, but it is not the capital.",
-            "Perth is the capital of Western Australia, not of the country."
-          ]
-        }
-      ]
-    }
-  ]
-}
+{ "files": ["everyday-science.json", "world-geography.json"] }
 ```
 
-* `answer` is the **0-based index** of the correct choice.
-* `id` values must be stable: progress is keyed by set id plus question id.
-* `passage`, `explanation` and `explanations` are optional. `explanations`, when present,
-  has one entry per choice (string or `null`).
-* A malformed set is reported in the UI and skipped; the rest of the file still loads.
-* The sample file in this repository demonstrates every field. The **Format** screen
-  documents the same schema in the app.
+Each listed file holds one set, either as a flat object or inside a
+`{ "sets": [...] }` wrapper. A set has `id`, `title`, optional `description`, and a
+non-empty `questions` array; each question has `id`, `question`, two or more
+`choices`, and `answer` as the **0-based index** of the correct choice.
+`passage`, `explanation` and per-choice `explanations` are optional.
+
+Ids are stable keys: progress is stored by set id plus question id, so renaming an
+id starts that item over. A broken file is reported in the banner with its file
+name and skipped; the rest still load. The complete field reference, validation
+rules and an "add a set" recipe are in [questions/README.md](questions/README.md);
+the in-app **Format** screen shows a compact version.
 
 ## Layout
 
@@ -97,11 +96,18 @@ app/index.html          shell
 app/styles.css          light/dark theme
 app/core.js             pure logic: JSON validation, grading, mastery, SRS,
                         session selection, archive/restore, stats
-app/app.js               routing, rendering, localStorage
-questions/sets.json     fixed-format question sets
+app/app.js              routing, rendering, localStorage + disk mirror
+questions/index.json    list of set files the app loads
+questions/*.json        one set per file
+questions/README.md     complete question-data format reference
+serve.py                stdlib static server + disk progress API
+qt                      one-command launcher for serve.py
 tools/test_core.js      node --test suite for core.js and the sample data
 LICENSE                 MIT licence
 ```
+
+`progress/` is created on demand, git-ignored, and holds `progress.json` unless
+`--progress` says otherwise.
 
 ## Tests
 
@@ -113,4 +119,4 @@ node --test tools/test_core.js
 
 Copyright © 2026 naromil. The original code, styles, tooling and documentation in this
 repository are released under the [MIT Licence](LICENSE). Question content you put in
-`questions/sets.json` is yours to manage.
+`questions/*.json` is yours to manage.

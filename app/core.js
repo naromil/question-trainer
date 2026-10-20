@@ -18,7 +18,11 @@
   var DAY_MS = 86400000;
   var STATE_VERSION = 1;
   var STATE_APP = 'question-trainer';
-  var SESSION_LENGTHS = [4, 8, 12, 20];
+  var SESSION_LENGTHS = [5, 10, 15, 20, 30, 50];
+  var DEFAULT_SESSION_LENGTH = 10;
+  /* Lengths offered by older versions are still honoured on import, so an
+   * existing export does not silently change its session size. */
+  var LEGACY_SESSION_LENGTHS = [4, 8, 12];
 
   /* ------------------------------------------------------------------ *
    * Mastery
@@ -52,6 +56,31 @@
     return n < lo ? lo : n > hi ? hi : n;
   }
 
+  /* Stored lengths are normally one of SESSION_LENGTHS, but exports from older
+   * versions may still carry 4, 8 or 12. Anything else falls back to 10. */
+  function sanitizeLength(value) {
+    var length = value | 0;
+    if (SESSION_LENGTHS.indexOf(length) >= 0 ||
+        LEGACY_SESSION_LENGTHS.indexOf(length) >= 0) {
+      return length;
+    }
+    return DEFAULT_SESSION_LENGTH;
+  }
+
+  /* How many questions one practice session should serve. With the practice-all
+   * switch on (the default), a set of 30 or fewer questions is served whole;
+   * larger sets, and the switch turned off, use the chosen session length.
+   * Review never calls this: it only serves what is due. */
+  function sessionLength(settings, questionCount) {
+    settings = settings && typeof settings === 'object' ? settings : {};
+    var count = Number(questionCount);
+    if (!isFinite(count) || count <= 0) return 0;
+    count = Math.floor(count);
+    if (!count) return 0;
+    if (settings.practiceAll !== false && count <= 30) return count;
+    return sanitizeLength(settings.length);
+  }
+
   function dayKey(ms) {
     var d = new Date(ms);
     var m = d.getMonth() + 1;
@@ -81,13 +110,15 @@
   /* ------------------------------------------------------------------ *
    * Fixed JSON format
    *
-   * questions/sets.json:
-   *   { "sets": [ { "id", "title", "description"?, "questions": [
+   * questions/index.json lists one file per set. Each set file is either the
+   * flat set object or a { "sets": [...] } wrapper:
+   *   { "id", "title", "description"?, "questions": [
    *       { "id", "question", "choices": ["..."], "answer": <0-based index>,
    *         "passage"?, "explanation"?, "explanations"?: ["..." | null] }
-   *   ] } ] }
+   *   ] }
    *
    * One bad set is reported and skipped; the rest of the file still loads.
+   * app/app.js prefixes file-level errors with the file name.
    * ------------------------------------------------------------------ */
   function text(value) {
     return typeof value === 'string' ? value.trim() : '';
@@ -231,7 +262,8 @@
       archived: {},
       days: {},
       settings: {
-        length: 4,
+        length: DEFAULT_SESSION_LENGTH,
+        practiceAll: true,
         theme: 'auto',
         sound: true
       },
@@ -328,8 +360,10 @@
     }
 
     if (raw.settings && typeof raw.settings === 'object') {
-      var length = raw.settings.length | 0;
-      state.settings.length = SESSION_LENGTHS.indexOf(length) >= 0 ? length : 4;
+      state.settings.length = sanitizeLength(raw.settings.length);
+      /* Exports predating the switch practised the whole set, so they default
+       * on; an explicit false is kept. */
+      state.settings.practiceAll = raw.settings.practiceAll !== false;
       state.settings.theme = ['auto', 'light', 'dark'].indexOf(raw.settings.theme) >= 0
         ? raw.settings.theme
         : 'auto';
@@ -689,6 +723,7 @@
     STATE_VERSION: STATE_VERSION,
     STATE_APP: STATE_APP,
     SESSION_LENGTHS: SESSION_LENGTHS,
+    DEFAULT_SESSION_LENGTH: DEFAULT_SESSION_LENGTH,
     DAY_MS: DAY_MS,
     dayKey: dayKey,
     letterFor: letterFor,
@@ -698,6 +733,7 @@
     cloneSet: cloneSet,
     emptyState: emptyState,
     sanitizeState: sanitizeState,
+    sessionLength: sessionLength,
     applyAnswer: applyAnswer,
     tierOf: tierOf,
     masteryOf: masteryOf,

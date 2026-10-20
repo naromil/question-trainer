@@ -3,8 +3,9 @@
  *
  * Question Trainer - the app: routing, rendering, storage.
  *
- * Reads questions/sets.json at startup, depends on window.QTCore for the pure
- * logic. Progress lives in localStorage. An in-flight session is only in
+ * Reads questions/index.json and the set files it lists at startup, depends on
+ * window.QTCore for the pure logic. Progress lives in localStorage and, when
+ * served by serve.py, is mirrored to disk. An in-flight session is only in
  * memory: a reload restarts the session, but every graded answer is saved.
  */
 (function () {
@@ -22,9 +23,14 @@
   }
 
   var STATE_KEY = 'questiontrainer.state.v1';
-  var BANK_URL = '../questions/sets.json';
+  var BANK_URL = '../questions/index.json';
   var SOURCE_SETS = [];
   var LOAD_ERRORS = [];
+  var LOCAL_STATE_PRESENT = false;
+  var PERSISTENCE_MODE = 'browser';
+  var PROGRESS_PATH = '';
+  var pushBusy = false;
+  var pushQueued = false;
   var state = loadState();
   var session = null;
   var timer = null;
@@ -60,11 +66,21 @@
   /* ------------------------------------------------------------ storage */
   function loadState() {
     var raw = null;
-    try { raw = JSON.parse(localStorage.getItem(STATE_KEY)); } catch (err) { raw = null; }
+    try {
+      var stored = localStorage.getItem(STATE_KEY);
+      if (stored) {
+        raw = JSON.parse(stored);
+        LOCAL_STATE_PRESENT = !!raw && raw.app === C.STATE_APP && raw.v === C.STATE_VERSION;
+      }
+    } catch (err) { raw = null; }
     return C.sanitizeState(raw, Date.now());
   }
 
-  function saveState() {
+  function progressUrl() {
+    return new URL('../api/progress', location.href).href;
+  }
+
+  function writeLocal() {
     try {
       localStorage.setItem(STATE_KEY, JSON.stringify(state));
       return true;
@@ -73,8 +89,78 @@
     }
   }
 
+  /* Fire-and-forget disk mirror. Posts are serialised so a slow request cannot
+   * let an older state overwrite a newer one; answers never wait for it. */
+  function pushProgress() {
+    if (PERSISTENCE_MODE !== 'disk' || location.protocol === 'file:') return;
+    if (pushBusy) { pushQueued = true; return; }
+    pushBusy = true;
+    var body;
+    try { body = JSON.stringify(state); } catch (err) {
+      pushBusy = false;
+      return;
+    }
+    fetch(progressUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+      cache: 'no-store'
+    }).then(function (response) {
+      var path = response.headers.get('X-Progress-Path');
+      if (path) PROGRESS_PATH = path;
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+    }).catch(function () {
+      /* localStorage is still authoritative for this page. */
+    }).then(function () {
+      pushBusy = false;
+      if (pushQueued) { pushQueued = false; pushProgress(); }
+    });
+  }
+
+  function saveState() {
+    var saved = writeLocal();
+    pushProgress();
+    return saved;
+  }
+
   function clearStoredState() {
     try { localStorage.removeItem(STATE_KEY); } catch (err) { /* ignore */ }
+  }
+
+  /* Read the server's copy at boot. A newer (or equal) disk state wins; a 204
+   * or an older copy means this browser's state is pushed immediately. */
+  async function initProgress() {
+    if (location.protocol === 'file:' || typeof fetch !== 'function') return;
+    try {
+      var response = await fetch(progressUrl(), { cache: 'no-store' });
+      var path = response.headers.get('X-Progress-Path');
+      if (path) PROGRESS_PATH = path;
+      if (response.status === 204) {
+        PERSISTENCE_MODE = 'disk';
+        pushProgress();
+        return;
+      }
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      var raw = await response.json();
+      PERSISTENCE_MODE = 'disk';
+      if (!raw || typeof raw !== 'object' || raw.app !== C.STATE_APP ||
+          raw.v !== C.STATE_VERSION) {
+        pushProgress();
+        return;
+      }
+      var serverState = C.sanitizeState(raw, Date.now());
+      var localUpdated = LOCAL_STATE_PRESENT ? state.updated : -Infinity;
+      if (serverState.updated >= localUpdated) {
+        state = serverState;
+        writeLocal();
+        applyTheme();
+        return;
+      }
+      pushProgress();
+    } catch (err) {
+      /* Plain static server or file://: keep working from localStorage. */
+      PERSISTENCE_MODE = 'browser';
+    }
   }
 
   /* ------------------------------------------------------------ theming */
@@ -138,36 +224,99 @@
   }
 
   /* ------------------------------------------------------------ data load */
+  /* A set file is either the flat set object or a { "sets": [...] } wrapper.
+   * Every error is prefixed with the file it came from. */
+  function parseBankFile(name, text) {
+    var raw;
+    try {
+      raw = JSON.parse(text);
+    } catch (err) {
+      throw new Error('invalid JSON: ' + err.message);
+    }
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && Array.isArray(raw.sets)) {
+      var bank = C.normalizeBank(raw);
+      bank.errors = bank.errors.map(function (error) {
+        return name + ': ' + error.message;
+      });
+      return bank;
+    }
+    try {
+      return { sets: [C.normalizeSet(raw, 0)], errors: [] };
+    } catch (err) {
+      return { sets: [], errors: [name + ': ' + err.message] };
+    }
+  }
+
+  function fetchBankFile(name, indexUrl) {
+    return fetch(new URL(name, indexUrl), { cache: 'no-store' }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+      return response.text();
+    }).then(function (text) {
+      return parseBankFile(name, text);
+    }).catch(function (err) {
+      return { sets: [], errors: [name + ': ' + err.message] };
+    });
+  }
+
   async function loadBank() {
+    SOURCE_SETS = [];
+    LOAD_ERRORS = [];
     if (location.protocol === 'file:') {
       LOAD_ERRORS.push('This page was opened from disk. Browsers block reading ' +
-        'questions/sets.json over file://. Serve the repository root over HTTP and open /app/.');
+        'questions/index.json over file://. Serve the repository root over HTTP and open /app/.');
       return;
     }
-    var url = new URL(BANK_URL, location.href);
+    var indexUrl = new URL(BANK_URL, location.href);
+    var index;
     try {
-      var response = await fetch(url, { cache: 'no-store' });
+      var response = await fetch(indexUrl, { cache: 'no-store' });
       if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
-      var text = await response.text();
-      var raw;
-      try {
-        raw = JSON.parse(text);
-      } catch (err) {
-        throw new Error('invalid JSON: ' + err.message);
-      }
-      var bank = C.normalizeBank(raw);
-      SOURCE_SETS = bank.sets;
-      LOAD_ERRORS = bank.errors.map(function (error) { return error.message; });
+      index = JSON.parse(await response.text());
     } catch (err) {
-      LOAD_ERRORS.push('Could not read ' + url.pathname + ': ' + err.message);
+      LOAD_ERRORS.push('Could not read ' + indexUrl.pathname + ': ' + err.message);
+      return;
     }
+    if (!index || typeof index !== 'object' || Array.isArray(index) ||
+        !Array.isArray(index.files)) {
+      LOAD_ERRORS.push('questions/index.json must be an object with a "files" array.');
+      return;
+    }
+
+    var names = [];
+    index.files.forEach(function (value) {
+      var name = typeof value === 'string' ? value.trim() : '';
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+        LOAD_ERRORS.push('questions/index.json: ' + JSON.stringify(value) +
+          ' is not a bare file name.');
+        return;
+      }
+      names.push(name);
+    });
+
+    var results = await Promise.all(names.map(function (name) {
+      return fetchBankFile(name, indexUrl);
+    }));
+    var seen = {};
+    results.forEach(function (result, i) {
+      var name = names[i];
+      result.sets.forEach(function (set) {
+        if (seen[set.id]) {
+          LOAD_ERRORS.push(name + ': duplicate set id "' + set.id +
+            '" (already loaded from another file).');
+          return;
+        }
+        seen[set.id] = true;
+        SOURCE_SETS.push(set);
+      });
+      LOAD_ERRORS = LOAD_ERRORS.concat(result.errors);
+    });
   }
 
   function noticeHTML() {
     if (!LOAD_ERRORS.length) return '';
     return '<div class="warnbox"><b>Question data problems</b><ul>' +
       LOAD_ERRORS.map(function (error) { return '<li>' + esc(error) + '</li>'; }).join('') +
-      '</ul><p class="small">Edit <code>questions/sets.json</code>. ' +
+      '</ul><p class="small">Edit <code>questions/index.json</code> and the files it lists. ' +
       '<a href="#/format">See the format</a>.</p></div>';
   }
 
@@ -277,8 +426,14 @@
   /* ------------------------------------------------------------ home */
   function setCard(row) {
     var tier = row.tier;
-    var due = row.due ? '<span class="tag due">' + row.due + ' due</span>' : '';
+    var practiceHref = '#/practice?set=' + encodeURIComponent(row.id);
+    var due = row.due
+      ? '<a class="tag due" href="' + practiceHref + '&mode=review" ' +
+        'title="Review the questions due in this set">' + row.due + ' due</a>'
+      : '';
     return '<article class="card set-card">' +
+      '<a class="card-hit" href="' + practiceHref + '" ' +
+        'aria-label="Practice ' + esc(row.title) + '"></a>' +
       '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
         '<span class="tag ' + tier.key + '">' + tier.label + '</span></div>' +
       (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
@@ -287,10 +442,6 @@
         row.attempted + '/' + row.total + ' answered · ' +
         row.accuracy + '% first try ' + due + '</div>' +
       '<div class="row">' +
-        '<a class="btn btn-sm btn-primary" href="#/practice?set=' +
-          encodeURIComponent(row.id) + '">Practice</a>' +
-        '<a class="btn btn-sm" href="#/practice?set=' + encodeURIComponent(row.id) +
-          '&mode=review">Review</a>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-archive="' +
           esc(row.id) + '">Archive</button>' +
       '</div></article>';
@@ -350,7 +501,7 @@
         (archived.length ? 'All sets are archived' : 'No question sets loaded') + '</h2>' +
         '<p class="muted">' + (archived.length
           ? 'Restore a set from the Archive to practice it again.'
-          : 'Add your sets to <code>questions/sets.json</code>, then reload the page. ' +
+          : 'Add your sets to <code>questions/index.json</code>, then reload the page. ' +
             'The format is on the <a href="#/format">format page</a>.') + '</p>' +
         (archived.length ? '<p><a class="btn btn-primary" href="#/archive">Open Archive</a></p>' : '') +
         '</div>';
@@ -384,7 +535,8 @@
     var now = Date.now();
     var html = '<div class="card"><h1>Archive</h1>' +
       '<p class="muted">Archived sets keep their question copy and progress in this ' +
-      'browser. Restore one to put it back on the set list.</p></div>';
+      'browser (mirrored to disk when served with <code>./qt</code>). Restore one to ' +
+      'put it back on the set list.</p></div>';
 
     if (!rows.length) {
       html += '<div class="card"><h2>Nothing archived</h2>' +
@@ -400,7 +552,7 @@
           (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
           '<p class="small muted">Archived ' + esc(fmtDate(set.archivedAt)) + '. ' +
             (inSource
-              ? 'The source set is still listed in <code>questions/sets.json</code>.'
+              ? 'The source set is still listed in <code>questions/index.json</code>.'
               : 'The source set is no longer listed; the archived copy is kept in this browser.') +
           '</p>' +
           '<div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
@@ -468,7 +620,7 @@
   function renderMissingSet(setId) {
     appEl.innerHTML = '<div class="card"><h2>Question set not found</h2>' +
       '<p>No set with id <code>' + esc(setId) + '</code> is loaded from ' +
-      '<code>questions/sets.json</code> or archived.</p>' +
+      '<code>questions/index.json</code> or archived.</p>' +
       '<p><a class="btn btn-primary" href="#/">Back to sets</a></p></div>';
   }
 
@@ -498,10 +650,17 @@
         session.cfg.mode !== 'retry')) {
       mode = 'practice';
     }
+    /* Practice honours the practice-all switch; review ignores it and keeps
+     * the chosen length as the cap on what is due. A retry link carries its
+     * own count. */
+    var requested = parseInt(params.get('n'), 10);
+    var defaultLength = mode === 'review'
+      ? state.settings.length
+      : C.sessionLength(state.settings, set.questions.length);
     var cfg = {
       setId: set.id,
       mode: mode,
-      length: clampInt(parseInt(params.get('n'), 10) || state.settings.length, 1, 50)
+      length: clampInt(requested > 0 ? requested : defaultLength, 1, 50)
     };
     if (!session || !sameCfg(session.cfg, cfg)) createSession(cfg);
 
@@ -933,8 +1092,25 @@
   }
 
   /* ------------------------------------------------------------ settings */
+  function persistenceHTML() {
+    if (PERSISTENCE_MODE === 'disk') {
+      return '<p class="small muted">Saved to disk at <code>' +
+        esc(PROGRESS_PATH || 'progress/progress.json') + '</code> and cached in this browser.' +
+        '</p>';
+    }
+    return '<p class="small muted">Browser-only: this page cannot reach the progress API. ' +
+      'Start the trainer with <code>./qt</code> (or <code>python3 serve.py</code>) to save ' +
+      'progress to disk.</p>';
+  }
+
   function renderSettings(route) {
-    var lengths = C.SESSION_LENGTHS.map(function (n) {
+    var lengthValues = C.SESSION_LENGTHS.slice();
+    /* Keep an imported legacy length visible instead of showing a select whose
+     * value does not exist; the next change replaces it with a current one. */
+    if (lengthValues.indexOf(state.settings.length) < 0) {
+      lengthValues.push(state.settings.length);
+    }
+    var lengths = lengthValues.map(function (n) {
       return '<option value="' + n + '"' + (state.settings.length === n ? ' selected' : '') +
         '>' + n + '</option>';
     }).join('');
@@ -944,6 +1120,11 @@
       '<h4>Session</h4>' +
       '<label class="field">Questions per session <select id="length">' +
         lengths + '</select></label>' +
+      '<label class="field"><input type="checkbox" id="practice-all"' +
+        (state.settings.practiceAll !== false ? ' checked' : '') + '> Practice every ' +
+        'question in a set with 30 or fewer questions, regardless of the session length ' +
+        '<span class="muted small">(spaced review always serves only what is due)</span>' +
+        '</label>' +
       '<label class="field">Theme <select id="theme">' +
         ['auto', 'light', 'dark'].map(function (theme) {
           return '<option value="' + theme + '"' +
@@ -958,15 +1139,16 @@
       '<div class="card"><h3>Question data</h3>' +
       '<p class="small muted">Loaded <b>' + SOURCE_SETS.length + '</b> ' +
         (SOURCE_SETS.length === 1 ? 'set' : 'sets') +
-        ' from <code>questions/sets.json</code>.' +
+        ' from <code>questions/index.json</code>.' +
         (LOAD_ERRORS.length ? ' <b>' + LOAD_ERRORS.length + '</b> data ' +
           plural(LOAD_ERRORS.length, 'problem') + ' — see the banner at the top.' : '') +
         ' <a href="#/format">JSON format</a>.</p>' +
       '<p class="small muted">There is no mixed practice: each session draws only from the ' +
         'set you choose.</p></div>' +
       '<div class="card"><h3>Progress data</h3>' +
-      '<p class="muted small">Everything is stored in this browser only. Back it up as JSON ' +
-        'if you switch machines or clear site data. Archived sets are included in the export.</p>' +
+      persistenceHTML() +
+      '<p class="muted small">Back it up as JSON if you switch machines or clear site ' +
+        'data. Archived sets are included in the export.</p>' +
       '<div class="row"><button class="btn" id="export">Export JSON</button>' +
         '<button class="btn" id="import-btn">Import JSON</button>' +
         '<button class="btn" id="reset">Reset all data</button>' +
@@ -977,6 +1159,10 @@
     var note = document.getElementById('note');
     $('#length').addEventListener('change', function (event) {
       state.settings.length = parseInt(event.target.value, 10);
+      saveState();
+    });
+    $('#practice-all').addEventListener('change', function (event) {
+      state.settings.practiceAll = event.target.checked;
       saveState();
     });
     $('#theme').addEventListener('change', function (event) {
@@ -1024,10 +1210,11 @@
     });
     $('#reset').addEventListener('click', function () {
       if (!window.confirm('Delete all practice history, progress and archived copies? ' +
-          'Your source sets stay in questions/sets.json.')) return;
+          'Your source sets stay in questions/index.json.')) return;
       clearStoredState();
       state = C.emptyState(Date.now());
       session = null;
+      saveState();
       applyTheme();
       renderPills();
       renderSettings(route);
@@ -1036,27 +1223,24 @@
 
   /* ------------------------------------------------------------ format */
   function renderFormat() {
-    var example = JSON.stringify({
-      sets: [
+    var indexExample = JSON.stringify({ files: ['example-set.json'] }, null, 2);
+    var setExample = JSON.stringify({
+      id: 'example-set',
+      title: 'Example Set',
+      description: 'Optional one-line description.',
+      questions: [
         {
-          id: 'example-set',
-          title: 'Example Set',
-          description: 'Optional one-line description.',
-          questions: [
-            {
-              id: 'q1',
-              passage: 'Optional context or passage.',
-              question: 'What is the capital of Australia?',
-              choices: ['Sydney', 'Canberra', 'Melbourne', 'Perth'],
-              answer: 1,
-              explanation: 'Canberra is the capital of Australia.',
-              explanations: [
-                'Sydney is the largest city, but it is not the capital.',
-                'Correct. Canberra is the capital.',
-                'Melbourne is a large city, but it is not the capital.',
-                'Perth is the capital of Western Australia, not of the country.'
-              ]
-            }
+          id: 'q1',
+          passage: 'Optional context or passage.',
+          question: 'What is the capital of Australia?',
+          choices: ['Sydney', 'Canberra', 'Melbourne', 'Perth'],
+          answer: 1,
+          explanation: 'Canberra is the capital of Australia.',
+          explanations: [
+            'Sydney is the largest city, but it is not the capital.',
+            'Correct. Canberra is the capital.',
+            'Melbourne is a large city, but it is not the capital.',
+            'Perth is the capital of Western Australia, not of the country.'
           ]
         }
       ]
@@ -1064,9 +1248,12 @@
 
     appEl.innerHTML =
       '<div class="card"><h1>Question JSON format</h1>' +
-      '<p>All sets live in <code>questions/sets.json</code>, which the app fetches at ' +
-      'startup. The file is one object with a <code>sets</code> array:</p>' +
-      '<pre class="code">' + esc(example) + '</pre>' +
+      '<p>The app fetches <code>questions/index.json</code> at startup. It lists the ' +
+      'set files to load by bare file name:</p>' +
+      '<pre class="code">' + esc(indexExample) + '</pre>' +
+      '<p>Each listed file holds one set. The shipped files use the flat form; a ' +
+      '<code>{ "sets": [...] }</code> wrapper with one or more sets is also accepted:</p>' +
+      '<pre class="code">' + esc(setExample) + '</pre>' +
       '<h3>Set fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
       '</tr></thead><tbody>' +
       '<tr><td><code>id</code></td><td>required</td><td>Stable, unique set id. Progress ' +
@@ -1090,17 +1277,24 @@
         'after answering.</td></tr>' +
       '<tr><td><code>explanations</code></td><td>optional</td><td>One entry per choice ' +
         '(string or <code>null</code>); each non-empty entry is shown under that choice.</td></tr>' +
-      '</tbody></table></div>' +
+      '</tbody></table>' +
+      '<p class="small muted">A broken file is skipped and reported in the banner with its ' +
+      'file name. Duplicate or missing set ids are reported too.</p></div>' +
       '<div class="card"><h3>Running it</h3>' +
-      '<p>Serve the repository root and open <code>/app/</code>:</p>' +
-      '<pre class="code">python3 -m http.server 8765' + '\n' +
+      '<p>Start the trainer from the repository root:</p>' +
+      '<pre class="code">./qt' + '\n' +
       'http://127.0.0.1:8765/app/</pre>' +
-      '<p>The app reads <code>questions/sets.json</code> with <code>fetch</code>, so opening ' +
+      '<p><code>qt</code> serves the repository and opens the app. It also writes progress ' +
+      'to <code>progress/progress.json</code>; use <code>--no-open</code>, <code>--port</code>, ' +
+      '<code>--host</code> or <code>--progress</code> to change that. The app reads ' +
+      '<code>questions/index.json</code> with <code>fetch</code>, so opening ' +
       '<code>index.html</code> directly from disk does not work in browsers that block ' +
       '<code>file://</code> reads.</p>' +
-      '<p>Progress lives in this browser only. <b>Archive</b> moves a set off the active ' +
-      'list and keeps a copy of its questions and progress in local storage; <b>Restore</b> ' +
-      'brings it back, even if the source file no longer lists it.</p></div>';
+      '<p>A plain static server still works (for example ' +
+      '<code>python3 -m http.server 8765</code>): progress then stays in this browser only, ' +
+      'and Settings says so. <b>Archive</b> moves a set off the active list and keeps a copy ' +
+      'of its questions and progress; <b>Restore</b> brings it back, even if the source file ' +
+      'no longer lists it.</p></div>';
   }
 
   /* ------------------------------------------------------------ keyboard */
@@ -1144,6 +1338,7 @@
     applyTheme();
     appEl.innerHTML = '<div class="card"><p class="muted">Loading question sets…</p></div>';
     await loadBank();
+    await initProgress();
     window.addEventListener('hashchange', render);
     render();
   }
