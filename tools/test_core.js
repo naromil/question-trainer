@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (c) 2026 naromil
  *
- * Node test suite for app/core.js and the sample bank in questions/sets.json.
+ * Node test suite for app/core.js and the sample bank in questions/index.json
+ * plus the per-set files it lists.
  * Run: node --test tools/test_core.js
  */
 'use strict';
@@ -180,13 +181,26 @@ test('normalizeBank: rejects a non-bank object', () => {
   assert.match(result.errors[0].message, /"sets" array/);
 });
 
-test('questions/sets.json is valid fixed-format data', () => {
-  const file = path.join(__dirname, '..', 'questions', 'sets.json');
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const result = C.normalizeBank(raw);
-  assert.deepEqual(result.errors, []);
-  assert.ok(result.sets.length >= 2);
-  result.sets.forEach((set) => {
+test('questions/index.json and its set files are valid fixed-format data', () => {
+  const root = path.join(__dirname, '..', 'questions');
+  const index = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8'));
+  assert.ok(Array.isArray(index.files));
+  assert.ok(index.files.length >= 2);
+
+  const sets = [];
+  index.files.forEach((name) => {
+    assert.ok(!name.includes('/') && !name.includes('\\'), `${name} is not a bare file name`);
+    const raw = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+    const bank = Array.isArray(raw.sets)
+      ? C.normalizeBank(raw)
+      : { sets: [C.normalizeSet(raw, 0)], errors: [] };
+    assert.deepEqual(bank.errors, [], `${name}: ${JSON.stringify(bank.errors)}`);
+    sets.push(...bank.sets);
+  });
+
+  assert.ok(sets.length >= 2);
+  assert.equal(new Set(sets.map((set) => set.id)).size, sets.length, 'set ids are unique');
+  sets.forEach((set) => {
     assert.ok(set.questions.length > 0);
     set.questions.forEach((item) => {
       assert.ok(item.choices.length >= 2);

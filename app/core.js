@@ -110,13 +110,15 @@
   /* ------------------------------------------------------------------ *
    * Fixed JSON format
    *
-   * questions/sets.json:
-   *   { "sets": [ { "id", "title", "description"?, "questions": [
+   * questions/index.json lists one file per set. Each set file is either the
+   * flat set object or a { "sets": [...] } wrapper:
+   *   { "id", "title", "description"?, "questions": [
    *       { "id", "question", "choices": ["..."], "answer": <0-based index>,
    *         "passage"?, "explanation"?, "explanations"?: ["..." | null] }
-   *   ] } ] }
+   *   ] }
    *
    * One bad set is reported and skipped; the rest of the file still loads.
+   * app/app.js prefixes file-level errors with the file name.
    * ------------------------------------------------------------------ */
   function text(value) {
     return typeof value === 'string' ? value.trim() : '';

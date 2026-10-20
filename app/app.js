@@ -3,9 +3,10 @@
  *
  * Question Trainer - the app: routing, rendering, storage.
  *
- * Reads questions/sets.json at startup, depends on window.QTCore for the pure
- * logic. Progress lives in localStorage. An in-flight session is only in
- * memory: a reload restarts the session, but every graded answer is saved.
+ * Reads questions/index.json and the set files it lists at startup, depends on
+ * window.QTCore for the pure logic. Progress lives in localStorage. An in-flight
+ * session is only in memory: a reload restarts the session, but every graded
+ * answer is saved.
  */
 (function () {
   'use strict';
@@ -22,7 +23,7 @@
   }
 
   var STATE_KEY = 'questiontrainer.state.v1';
-  var BANK_URL = '../questions/sets.json';
+  var BANK_URL = '../questions/index.json';
   var SOURCE_SETS = [];
   var LOAD_ERRORS = [];
   var state = loadState();
@@ -138,36 +139,99 @@
   }
 
   /* ------------------------------------------------------------ data load */
+  /* A set file is either the flat set object or a { "sets": [...] } wrapper.
+   * Every error is prefixed with the file it came from. */
+  function parseBankFile(name, text) {
+    var raw;
+    try {
+      raw = JSON.parse(text);
+    } catch (err) {
+      throw new Error('invalid JSON: ' + err.message);
+    }
+    if (raw && typeof raw === 'object' && !Array.isArray(raw) && Array.isArray(raw.sets)) {
+      var bank = C.normalizeBank(raw);
+      bank.errors = bank.errors.map(function (error) {
+        return name + ': ' + error.message;
+      });
+      return bank;
+    }
+    try {
+      return { sets: [C.normalizeSet(raw, 0)], errors: [] };
+    } catch (err) {
+      return { sets: [], errors: [name + ': ' + err.message] };
+    }
+  }
+
+  function fetchBankFile(name, indexUrl) {
+    return fetch(new URL(name, indexUrl), { cache: 'no-store' }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+      return response.text();
+    }).then(function (text) {
+      return parseBankFile(name, text);
+    }).catch(function (err) {
+      return { sets: [], errors: [name + ': ' + err.message] };
+    });
+  }
+
   async function loadBank() {
+    SOURCE_SETS = [];
+    LOAD_ERRORS = [];
     if (location.protocol === 'file:') {
       LOAD_ERRORS.push('This page was opened from disk. Browsers block reading ' +
-        'questions/sets.json over file://. Serve the repository root over HTTP and open /app/.');
+        'questions/index.json over file://. Serve the repository root over HTTP and open /app/.');
       return;
     }
-    var url = new URL(BANK_URL, location.href);
+    var indexUrl = new URL(BANK_URL, location.href);
+    var index;
     try {
-      var response = await fetch(url, { cache: 'no-store' });
+      var response = await fetch(indexUrl, { cache: 'no-store' });
       if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
-      var text = await response.text();
-      var raw;
-      try {
-        raw = JSON.parse(text);
-      } catch (err) {
-        throw new Error('invalid JSON: ' + err.message);
-      }
-      var bank = C.normalizeBank(raw);
-      SOURCE_SETS = bank.sets;
-      LOAD_ERRORS = bank.errors.map(function (error) { return error.message; });
+      index = JSON.parse(await response.text());
     } catch (err) {
-      LOAD_ERRORS.push('Could not read ' + url.pathname + ': ' + err.message);
+      LOAD_ERRORS.push('Could not read ' + indexUrl.pathname + ': ' + err.message);
+      return;
     }
+    if (!index || typeof index !== 'object' || Array.isArray(index) ||
+        !Array.isArray(index.files)) {
+      LOAD_ERRORS.push('questions/index.json must be an object with a "files" array.');
+      return;
+    }
+
+    var names = [];
+    index.files.forEach(function (value) {
+      var name = typeof value === 'string' ? value.trim() : '';
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+        LOAD_ERRORS.push('questions/index.json: ' + JSON.stringify(value) +
+          ' is not a bare file name.');
+        return;
+      }
+      names.push(name);
+    });
+
+    var results = await Promise.all(names.map(function (name) {
+      return fetchBankFile(name, indexUrl);
+    }));
+    var seen = {};
+    results.forEach(function (result, i) {
+      var name = names[i];
+      result.sets.forEach(function (set) {
+        if (seen[set.id]) {
+          LOAD_ERRORS.push(name + ': duplicate set id "' + set.id +
+            '" (already loaded from another file).');
+          return;
+        }
+        seen[set.id] = true;
+        SOURCE_SETS.push(set);
+      });
+      LOAD_ERRORS = LOAD_ERRORS.concat(result.errors);
+    });
   }
 
   function noticeHTML() {
     if (!LOAD_ERRORS.length) return '';
     return '<div class="warnbox"><b>Question data problems</b><ul>' +
       LOAD_ERRORS.map(function (error) { return '<li>' + esc(error) + '</li>'; }).join('') +
-      '</ul><p class="small">Edit <code>questions/sets.json</code>. ' +
+      '</ul><p class="small">Edit <code>questions/index.json</code> and the files it lists. ' +
       '<a href="#/format">See the format</a>.</p></div>';
   }
 
@@ -352,7 +416,7 @@
         (archived.length ? 'All sets are archived' : 'No question sets loaded') + '</h2>' +
         '<p class="muted">' + (archived.length
           ? 'Restore a set from the Archive to practice it again.'
-          : 'Add your sets to <code>questions/sets.json</code>, then reload the page. ' +
+          : 'Add your sets to <code>questions/index.json</code>, then reload the page. ' +
             'The format is on the <a href="#/format">format page</a>.') + '</p>' +
         (archived.length ? '<p><a class="btn btn-primary" href="#/archive">Open Archive</a></p>' : '') +
         '</div>';
@@ -402,7 +466,7 @@
           (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
           '<p class="small muted">Archived ' + esc(fmtDate(set.archivedAt)) + '. ' +
             (inSource
-              ? 'The source set is still listed in <code>questions/sets.json</code>.'
+              ? 'The source set is still listed in <code>questions/index.json</code>.'
               : 'The source set is no longer listed; the archived copy is kept in this browser.') +
           '</p>' +
           '<div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
@@ -470,7 +534,7 @@
   function renderMissingSet(setId) {
     appEl.innerHTML = '<div class="card"><h2>Question set not found</h2>' +
       '<p>No set with id <code>' + esc(setId) + '</code> is loaded from ' +
-      '<code>questions/sets.json</code> or archived.</p>' +
+      '<code>questions/index.json</code> or archived.</p>' +
       '<p><a class="btn btn-primary" href="#/">Back to sets</a></p></div>';
   }
 
@@ -978,7 +1042,7 @@
       '<div class="card"><h3>Question data</h3>' +
       '<p class="small muted">Loaded <b>' + SOURCE_SETS.length + '</b> ' +
         (SOURCE_SETS.length === 1 ? 'set' : 'sets') +
-        ' from <code>questions/sets.json</code>.' +
+        ' from <code>questions/index.json</code>.' +
         (LOAD_ERRORS.length ? ' <b>' + LOAD_ERRORS.length + '</b> data ' +
           plural(LOAD_ERRORS.length, 'problem') + ' — see the banner at the top.' : '') +
         ' <a href="#/format">JSON format</a>.</p>' +
@@ -1048,7 +1112,7 @@
     });
     $('#reset').addEventListener('click', function () {
       if (!window.confirm('Delete all practice history, progress and archived copies? ' +
-          'Your source sets stay in questions/sets.json.')) return;
+          'Your source sets stay in questions/index.json.')) return;
       clearStoredState();
       state = C.emptyState(Date.now());
       session = null;
@@ -1060,27 +1124,24 @@
 
   /* ------------------------------------------------------------ format */
   function renderFormat() {
-    var example = JSON.stringify({
-      sets: [
+    var indexExample = JSON.stringify({ files: ['example-set.json'] }, null, 2);
+    var setExample = JSON.stringify({
+      id: 'example-set',
+      title: 'Example Set',
+      description: 'Optional one-line description.',
+      questions: [
         {
-          id: 'example-set',
-          title: 'Example Set',
-          description: 'Optional one-line description.',
-          questions: [
-            {
-              id: 'q1',
-              passage: 'Optional context or passage.',
-              question: 'What is the capital of Australia?',
-              choices: ['Sydney', 'Canberra', 'Melbourne', 'Perth'],
-              answer: 1,
-              explanation: 'Canberra is the capital of Australia.',
-              explanations: [
-                'Sydney is the largest city, but it is not the capital.',
-                'Correct. Canberra is the capital.',
-                'Melbourne is a large city, but it is not the capital.',
-                'Perth is the capital of Western Australia, not of the country.'
-              ]
-            }
+          id: 'q1',
+          passage: 'Optional context or passage.',
+          question: 'What is the capital of Australia?',
+          choices: ['Sydney', 'Canberra', 'Melbourne', 'Perth'],
+          answer: 1,
+          explanation: 'Canberra is the capital of Australia.',
+          explanations: [
+            'Sydney is the largest city, but it is not the capital.',
+            'Correct. Canberra is the capital.',
+            'Melbourne is a large city, but it is not the capital.',
+            'Perth is the capital of Western Australia, not of the country.'
           ]
         }
       ]
@@ -1088,9 +1149,12 @@
 
     appEl.innerHTML =
       '<div class="card"><h1>Question JSON format</h1>' +
-      '<p>All sets live in <code>questions/sets.json</code>, which the app fetches at ' +
-      'startup. The file is one object with a <code>sets</code> array:</p>' +
-      '<pre class="code">' + esc(example) + '</pre>' +
+      '<p>The app fetches <code>questions/index.json</code> at startup. It lists the ' +
+      'set files to load by bare file name:</p>' +
+      '<pre class="code">' + esc(indexExample) + '</pre>' +
+      '<p>Each listed file holds one set. The shipped files use the flat form; a ' +
+      '<code>{ "sets": [...] }</code> wrapper with one or more sets is also accepted:</p>' +
+      '<pre class="code">' + esc(setExample) + '</pre>' +
       '<h3>Set fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
       '</tr></thead><tbody>' +
       '<tr><td><code>id</code></td><td>required</td><td>Stable, unique set id. Progress ' +
@@ -1114,12 +1178,14 @@
         'after answering.</td></tr>' +
       '<tr><td><code>explanations</code></td><td>optional</td><td>One entry per choice ' +
         '(string or <code>null</code>); each non-empty entry is shown under that choice.</td></tr>' +
-      '</tbody></table></div>' +
+      '</tbody></table>' +
+      '<p class="small muted">A broken file is skipped and reported in the banner with its ' +
+      'file name. Duplicate or missing set ids are reported too.</p></div>' +
       '<div class="card"><h3>Running it</h3>' +
       '<p>Serve the repository root and open <code>/app/</code>:</p>' +
       '<pre class="code">python3 -m http.server 8765' + '\n' +
       'http://127.0.0.1:8765/app/</pre>' +
-      '<p>The app reads <code>questions/sets.json</code> with <code>fetch</code>, so opening ' +
+      '<p>The app reads <code>questions/index.json</code> with <code>fetch</code>, so opening ' +
       '<code>index.html</code> directly from disk does not work in browsers that block ' +
       '<code>file://</code> reads.</p>' +
       '<p>Progress lives in this browser only. <b>Archive</b> moves a set off the active ' +
