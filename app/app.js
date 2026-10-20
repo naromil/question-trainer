@@ -4,9 +4,9 @@
  * Question Trainer - the app: routing, rendering, storage.
  *
  * Reads questions/index.json and the set files it lists at startup, depends on
- * window.QTCore for the pure logic. Progress lives in localStorage. An in-flight
- * session is only in memory: a reload restarts the session, but every graded
- * answer is saved.
+ * window.QTCore for the pure logic. Progress lives in localStorage and, when
+ * served by serve.py, is mirrored to disk. An in-flight session is only in
+ * memory: a reload restarts the session, but every graded answer is saved.
  */
 (function () {
   'use strict';
@@ -26,6 +26,11 @@
   var BANK_URL = '../questions/index.json';
   var SOURCE_SETS = [];
   var LOAD_ERRORS = [];
+  var LOCAL_STATE_PRESENT = false;
+  var PERSISTENCE_MODE = 'browser';
+  var PROGRESS_PATH = '';
+  var pushBusy = false;
+  var pushQueued = false;
   var state = loadState();
   var session = null;
   var timer = null;
@@ -61,11 +66,21 @@
   /* ------------------------------------------------------------ storage */
   function loadState() {
     var raw = null;
-    try { raw = JSON.parse(localStorage.getItem(STATE_KEY)); } catch (err) { raw = null; }
+    try {
+      var stored = localStorage.getItem(STATE_KEY);
+      if (stored) {
+        raw = JSON.parse(stored);
+        LOCAL_STATE_PRESENT = !!raw && raw.app === C.STATE_APP && raw.v === C.STATE_VERSION;
+      }
+    } catch (err) { raw = null; }
     return C.sanitizeState(raw, Date.now());
   }
 
-  function saveState() {
+  function progressUrl() {
+    return new URL('../api/progress', location.href).href;
+  }
+
+  function writeLocal() {
     try {
       localStorage.setItem(STATE_KEY, JSON.stringify(state));
       return true;
@@ -74,8 +89,78 @@
     }
   }
 
+  /* Fire-and-forget disk mirror. Posts are serialised so a slow request cannot
+   * let an older state overwrite a newer one; answers never wait for it. */
+  function pushProgress() {
+    if (PERSISTENCE_MODE !== 'disk' || location.protocol === 'file:') return;
+    if (pushBusy) { pushQueued = true; return; }
+    pushBusy = true;
+    var body;
+    try { body = JSON.stringify(state); } catch (err) {
+      pushBusy = false;
+      return;
+    }
+    fetch(progressUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+      cache: 'no-store'
+    }).then(function (response) {
+      var path = response.headers.get('X-Progress-Path');
+      if (path) PROGRESS_PATH = path;
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+    }).catch(function () {
+      /* localStorage is still authoritative for this page. */
+    }).then(function () {
+      pushBusy = false;
+      if (pushQueued) { pushQueued = false; pushProgress(); }
+    });
+  }
+
+  function saveState() {
+    var saved = writeLocal();
+    pushProgress();
+    return saved;
+  }
+
   function clearStoredState() {
     try { localStorage.removeItem(STATE_KEY); } catch (err) { /* ignore */ }
+  }
+
+  /* Read the server's copy at boot. A newer (or equal) disk state wins; a 204
+   * or an older copy means this browser's state is pushed immediately. */
+  async function initProgress() {
+    if (location.protocol === 'file:' || typeof fetch !== 'function') return;
+    try {
+      var response = await fetch(progressUrl(), { cache: 'no-store' });
+      var path = response.headers.get('X-Progress-Path');
+      if (path) PROGRESS_PATH = path;
+      if (response.status === 204) {
+        PERSISTENCE_MODE = 'disk';
+        pushProgress();
+        return;
+      }
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      var raw = await response.json();
+      PERSISTENCE_MODE = 'disk';
+      if (!raw || typeof raw !== 'object' || raw.app !== C.STATE_APP ||
+          raw.v !== C.STATE_VERSION) {
+        pushProgress();
+        return;
+      }
+      var serverState = C.sanitizeState(raw, Date.now());
+      var localUpdated = LOCAL_STATE_PRESENT ? state.updated : -Infinity;
+      if (serverState.updated >= localUpdated) {
+        state = serverState;
+        writeLocal();
+        applyTheme();
+        return;
+      }
+      pushProgress();
+    } catch (err) {
+      /* Plain static server or file://: keep working from localStorage. */
+      PERSISTENCE_MODE = 'browser';
+    }
   }
 
   /* ------------------------------------------------------------ theming */
@@ -263,8 +348,16 @@
     /* Practice belongs to the set list, not to its own nav entry. */
     var active = path === '/practice' ? '/' : path;
     $$('#nav a').forEach(function (link) {
-      if (link.getAttribute('data-route') === active) link.setAttribute('aria-current', 'page');
-      else link.removeAttribute('aria-current');
+      var route = link.getAttribute('data-route');
+      if (route === active) {
+        link.setAttribute('aria-current', 'page');
+        /* Keep data-route as the final attribute so the rendered link stays
+         * simple to parse (the route value immediately precedes the label). */
+        link.removeAttribute('data-route');
+        link.setAttribute('data-route', route);
+      } else {
+        link.removeAttribute('aria-current');
+      }
     });
   }
 
@@ -450,7 +543,8 @@
     var now = Date.now();
     var html = '<div class="card"><h1>Archive</h1>' +
       '<p class="muted">Archived sets keep their question copy and progress in this ' +
-      'browser. Restore one to put it back on the set list.</p></div>';
+      'browser (mirrored to disk when served with <code>./qt</code>). Restore one to ' +
+      'put it back on the set list.</p></div>';
 
     if (!rows.length) {
       html += '<div class="card"><h2>Nothing archived</h2>' +
@@ -1006,6 +1100,17 @@
   }
 
   /* ------------------------------------------------------------ settings */
+  function persistenceHTML() {
+    if (PERSISTENCE_MODE === 'disk') {
+      return '<p class="small muted">Saved to disk at <code>' +
+        esc(PROGRESS_PATH || 'progress/progress.json') + '</code> and cached in this browser.' +
+        '</p>';
+    }
+    return '<p class="small muted">Browser-only: this page cannot reach the progress API. ' +
+      'Start the trainer with <code>./qt</code> (or <code>python3 serve.py</code>) to save ' +
+      'progress to disk.</p>';
+  }
+
   function renderSettings(route) {
     var lengthValues = C.SESSION_LENGTHS.slice();
     /* Keep an imported legacy length visible instead of showing a select whose
@@ -1049,8 +1154,9 @@
       '<p class="small muted">There is no mixed practice: each session draws only from the ' +
         'set you choose.</p></div>' +
       '<div class="card"><h3>Progress data</h3>' +
-      '<p class="muted small">Everything is stored in this browser only. Back it up as JSON ' +
-        'if you switch machines or clear site data. Archived sets are included in the export.</p>' +
+      persistenceHTML() +
+      '<p class="muted small">Back it up as JSON if you switch machines or clear site ' +
+        'data. Archived sets are included in the export.</p>' +
       '<div class="row"><button class="btn" id="export">Export JSON</button>' +
         '<button class="btn" id="import-btn">Import JSON</button>' +
         '<button class="btn" id="reset">Reset all data</button>' +
@@ -1116,6 +1222,7 @@
       clearStoredState();
       state = C.emptyState(Date.now());
       session = null;
+      saveState();
       applyTheme();
       renderPills();
       renderSettings(route);
@@ -1182,15 +1289,20 @@
       '<p class="small muted">A broken file is skipped and reported in the banner with its ' +
       'file name. Duplicate or missing set ids are reported too.</p></div>' +
       '<div class="card"><h3>Running it</h3>' +
-      '<p>Serve the repository root and open <code>/app/</code>:</p>' +
-      '<pre class="code">python3 -m http.server 8765' + '\n' +
+      '<p>Start the trainer from the repository root:</p>' +
+      '<pre class="code">./qt' + '\n' +
       'http://127.0.0.1:8765/app/</pre>' +
-      '<p>The app reads <code>questions/index.json</code> with <code>fetch</code>, so opening ' +
+      '<p><code>qt</code> serves the repository and opens the app. It also writes progress ' +
+      'to <code>progress/progress.json</code>; use <code>--no-open</code>, <code>--port</code>, ' +
+      '<code>--host</code> or <code>--progress</code> to change that. The app reads ' +
+      '<code>questions/index.json</code> with <code>fetch</code>, so opening ' +
       '<code>index.html</code> directly from disk does not work in browsers that block ' +
       '<code>file://</code> reads.</p>' +
-      '<p>Progress lives in this browser only. <b>Archive</b> moves a set off the active ' +
-      'list and keeps a copy of its questions and progress in local storage; <b>Restore</b> ' +
-      'brings it back, even if the source file no longer lists it.</p></div>';
+      '<p>A plain static server still works (for example ' +
+      '<code>python3 -m http.server 8765</code>): progress then stays in this browser only, ' +
+      'and Settings says so. <b>Archive</b> moves a set off the active list and keeps a copy ' +
+      'of its questions and progress; <b>Restore</b> brings it back, even if the source file ' +
+      'no longer lists it.</p></div>';
   }
 
   /* ------------------------------------------------------------ keyboard */
@@ -1234,6 +1346,7 @@
     applyTheme();
     appEl.innerHTML = '<div class="card"><p class="muted">Loading question sets…</p></div>';
     await loadBank();
+    await initProgress();
     window.addEventListener('hashchange', render);
     render();
   }

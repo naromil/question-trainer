@@ -10,16 +10,35 @@ set under `questions/`.
 
 ## Run it
 
-The app fetches its question file, so serve the repository root over HTTP rather than
-opening the HTML from disk:
+From the repository root:
 
 ```bash
-python3 -m http.server 8765
-# then open http://127.0.0.1:8765/app/
+./qt
 ```
 
-Progress and archived sets live in `localStorage`, so pick one origin and stay on it.
-Use **Settings → Export/Import JSON** to move progress between machines or origins.
+`qt` starts the stdlib server, serves the repository at
+`http://127.0.0.1:8765/app/`, and opens that URL in your browser. Progress is
+written to `progress/progress.json` (git-ignored) as well as to `localStorage`,
+so it survives a browser-data wipe and a server restart.
+
+```bash
+./qt --port 9000 --no-open          # another port; do not open a browser
+./qt --host 0.0.0.0                 # listen on all interfaces
+./qt --progress /tmp/qt-progress.json
+```
+
+`--progress` may be absolute, or relative to the repository root; the default is
+`progress/progress.json`. `--host` defaults to `127.0.0.1` and `--port` to
+`8765`. `python3 serve.py` accepts the same flags.
+
+The page still works from a plain static server (for example
+`python3 -m http.server 8765` with `http://127.0.0.1:8765/app/`) or when opened
+from disk where the browser allows it. In that mode the progress API is not
+available, so everything stays in `localStorage`; **Settings → Progress data**
+says which mode is active.
+
+Use **Settings → Export/Import JSON** to move progress between machines or
+origins.
 
 ## What it does
 
@@ -77,13 +96,18 @@ app/index.html          shell
 app/styles.css          light/dark theme
 app/core.js             pure logic: JSON validation, grading, mastery, SRS,
                         session selection, archive/restore, stats
-app/app.js              routing, rendering, localStorage
+app/app.js              routing, rendering, localStorage + disk mirror
 questions/index.json    list of set files the app loads
 questions/*.json        one set per file
 questions/README.md     complete question-data format reference
+serve.py                stdlib static server + disk progress API
+qt                      one-command launcher for serve.py
 tools/test_core.js      node --test suite for core.js and the sample data
 LICENSE                 MIT licence
 ```
+
+`progress/` is created on demand, git-ignored, and holds `progress.json` unless
+`--progress` says otherwise.
 
 ## Tests
 
