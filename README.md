@@ -49,7 +49,7 @@ origins.
 | **Results** | Score, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions**. |
 | **Archive** | Sets you archived, with their progress and a saved copy of their questions. **Restore** puts a set back on the active list. If the set is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
 | **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count, a 14-day activity chart, a per-set table, and repeated trouble spots. |
-| **Settings** | Session length, theme, answer sounds, export/import/reset. |
+| **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. |
 | **Format** | The in-app schema summary with an example; the full reference is [questions/README.md](questions/README.md). |
 
 ### Mastery
