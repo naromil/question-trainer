@@ -3,3 +3,9 @@
 
 # Python bytecode.
 __pycache__/
+
+# Supervision briefs and round logs.
+.supervision/
+
+# Progress saved to disk by serve.py.
+progress/
