@@ -277,8 +277,14 @@
   /* ------------------------------------------------------------ home */
   function setCard(row) {
     var tier = row.tier;
-    var due = row.due ? '<span class="tag due">' + row.due + ' due</span>' : '';
+    var practiceHref = '#/practice?set=' + encodeURIComponent(row.id);
+    var due = row.due
+      ? '<a class="tag due" href="' + practiceHref + '&mode=review" ' +
+        'title="Review the questions due in this set">' + row.due + ' due</a>'
+      : '';
     return '<article class="card set-card">' +
+      '<a class="card-hit" href="' + practiceHref + '" ' +
+        'aria-label="Practice ' + esc(row.title) + '"></a>' +
       '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
         '<span class="tag ' + tier.key + '">' + tier.label + '</span></div>' +
       (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
@@ -287,10 +293,6 @@
         row.attempted + '/' + row.total + ' answered · ' +
         row.accuracy + '% first try ' + due + '</div>' +
       '<div class="row">' +
-        '<a class="btn btn-sm btn-primary" href="#/practice?set=' +
-          encodeURIComponent(row.id) + '">Practice</a>' +
-        '<a class="btn btn-sm" href="#/practice?set=' + encodeURIComponent(row.id) +
-          '&mode=review">Review</a>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-archive="' +
           esc(row.id) + '">Archive</button>' +
       '</div></article>';
