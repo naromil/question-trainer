@@ -52,6 +52,67 @@ function seqRng(values) {
   };
 }
 
+/* ------------------------------------------------------------ session size */
+
+test('sessionLength: practice-all serves a small set whole and caps at 30', () => {
+  assert.deepEqual(C.SESSION_LENGTHS, [5, 10, 15, 20, 30, 50]);
+  const settings = { length: 10, practiceAll: true };
+  assert.equal(C.sessionLength(settings, 0), 0);
+  assert.equal(C.sessionLength(settings, 12), 12);
+  assert.equal(C.sessionLength(settings, 30), 30);
+  assert.equal(C.sessionLength(settings, 31), 10);
+  assert.equal(C.sessionLength({ length: 20, practiceAll: true }, 40), 20);
+});
+
+test('sessionLength: switch off or missing uses the sanitised length', () => {
+  assert.equal(C.sessionLength({ length: 15, practiceAll: false }, 12), 15);
+  assert.equal(C.sessionLength({ length: 20 }, 7), 7, 'missing practiceAll defaults on');
+  assert.equal(C.sessionLength({ length: 10 }, 40), 10);
+  assert.equal(C.sessionLength({ practiceAll: false }, 12), 10);
+  assert.equal(C.sessionLength({ length: 7, practiceAll: false }, 12), 10);
+  assert.equal(C.sessionLength(null, 12), 12);
+});
+
+test('emptyState: session defaults are 10 and practice-all on', () => {
+  assert.deepEqual(C.emptyState(NOW).settings, {
+    length: 10,
+    practiceAll: true,
+    theme: 'auto',
+    sound: true
+  });
+});
+
+test('sanitizeState: keeps known lengths and migrates practiceAll', () => {
+  const base = {
+    app: C.STATE_APP,
+    v: 1,
+    q: {},
+    sets: {},
+    local: {},
+    archived: {},
+    days: {},
+    totals: { a: 0, c: 0, sessions: 0 }
+  };
+  const old = C.sanitizeState(Object.assign({}, base, {
+    settings: { length: 4, theme: 'dark', sound: false }
+  }), NOW);
+  assert.equal(old.settings.length, 4, 'a legacy length survives');
+  assert.equal(old.settings.practiceAll, true, 'old exports gain the switch');
+  assert.equal(old.settings.theme, 'dark');
+  assert.equal(old.settings.sound, false);
+
+  const off = C.sanitizeState(Object.assign({}, base, {
+    settings: { length: 12, practiceAll: false }
+  }), NOW);
+  assert.equal(off.settings.practiceAll, false, 'an explicit false is kept');
+
+  const junk = C.sanitizeState(Object.assign({}, base, {
+    settings: { length: 7, practiceAll: false }
+  }), NOW);
+  assert.equal(junk.settings.length, 10, 'an unknown length falls back to 10');
+  assert.equal(junk.settings.practiceAll, false);
+});
+
 /* ------------------------------------------------------------- the format */
 
 test('normalizeBank: accepts the fixed format and applies defaults', () => {
@@ -324,7 +385,8 @@ test('sanitizeState: junk imports become a usable empty state', () => {
   const state = C.sanitizeState({ v: 1, q: 'nope', totals: 'nope' }, NOW);
   assert.deepEqual(state.q, {});
   assert.deepEqual(state.totals, { a: 0, c: 0, sessions: 0 });
-  assert.equal(state.settings.length, 4);
+  assert.equal(state.settings.length, 10);
+  assert.equal(state.settings.practiceAll, true);
 
   assert.deepEqual(C.sanitizeState({ v: 99, q: {} }, NOW), C.emptyState(NOW));
   assert.deepEqual(C.sanitizeState({ app: 'other-trainer', v: 1, q: {} }, NOW),
@@ -369,9 +431,10 @@ test('sanitizeState: clamps nonsense records instead of trusting them', () => {
   assert.equal(state.sets.set.points, 100);
   assert.equal(state.sets.set.a, 0);
   assert.equal(state.sets.set.streak, 0);
-  assert.equal(state.settings.length, 4);
+  assert.equal(state.settings.length, 10);
   assert.equal(state.settings.theme, 'auto');
   assert.equal(state.settings.sound, false);
+  assert.equal(state.settings.practiceAll, true);
   assert.deepEqual(state.totals, { a: 2, c: 2, sessions: 0 });
 });
 

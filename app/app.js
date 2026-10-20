@@ -498,10 +498,17 @@
         session.cfg.mode !== 'retry')) {
       mode = 'practice';
     }
+    /* Practice honours the practice-all switch; review ignores it and keeps
+     * the chosen length as the cap on what is due. A retry link carries its
+     * own count. */
+    var requested = parseInt(params.get('n'), 10);
+    var defaultLength = mode === 'review'
+      ? state.settings.length
+      : C.sessionLength(state.settings, set.questions.length);
     var cfg = {
       setId: set.id,
       mode: mode,
-      length: clampInt(parseInt(params.get('n'), 10) || state.settings.length, 1, 50)
+      length: clampInt(requested > 0 ? requested : defaultLength, 1, 50)
     };
     if (!session || !sameCfg(session.cfg, cfg)) createSession(cfg);
 
@@ -934,7 +941,13 @@
 
   /* ------------------------------------------------------------ settings */
   function renderSettings(route) {
-    var lengths = C.SESSION_LENGTHS.map(function (n) {
+    var lengthValues = C.SESSION_LENGTHS.slice();
+    /* Keep an imported legacy length visible instead of showing a select whose
+     * value does not exist; the next change replaces it with a current one. */
+    if (lengthValues.indexOf(state.settings.length) < 0) {
+      lengthValues.push(state.settings.length);
+    }
+    var lengths = lengthValues.map(function (n) {
       return '<option value="' + n + '"' + (state.settings.length === n ? ' selected' : '') +
         '>' + n + '</option>';
     }).join('');
@@ -944,6 +957,11 @@
       '<h4>Session</h4>' +
       '<label class="field">Questions per session <select id="length">' +
         lengths + '</select></label>' +
+      '<label class="field"><input type="checkbox" id="practice-all"' +
+        (state.settings.practiceAll !== false ? ' checked' : '') + '> Practice every ' +
+        'question in a set with 30 or fewer questions, regardless of the session length ' +
+        '<span class="muted small">(spaced review always serves only what is due)</span>' +
+        '</label>' +
       '<label class="field">Theme <select id="theme">' +
         ['auto', 'light', 'dark'].map(function (theme) {
           return '<option value="' + theme + '"' +
@@ -977,6 +995,10 @@
     var note = document.getElementById('note');
     $('#length').addEventListener('change', function (event) {
       state.settings.length = parseInt(event.target.value, 10);
+      saveState();
+    });
+    $('#practice-all').addEventListener('change', function (event) {
+      state.settings.practiceAll = event.target.checked;
       saveState();
     });
     $('#theme').addEventListener('change', function (event) {
