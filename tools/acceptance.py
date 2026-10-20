@@ -375,7 +375,7 @@ def dump_dom(url: str) -> str:
 CARD_RE = re.compile(r'<article class="card set-card"[\s\S]*?</article>')
 
 
-@check("main page: no Practice/Review buttons on the set card")
+@check("main page: set cards keep Practice/Review/Archive, the hero card has no buttons")
 def dom_home_cards() -> str:
     with tempfile.TemporaryDirectory() as tmp:
         progress_file = Path(tmp) / "progress.json"
@@ -385,14 +385,21 @@ def dom_home_cards() -> str:
             dom = dump_dom(base + "/app/#/")
         finally:
             stop(proc)
+        hero = re.search(r'<div class="hero">([\s\S]*?)<div class="card"><div class="statgrid">', dom)
+        need(hero is not None, "no hero card rendered")
+        assert hero is not None
+        need("Question JSON format" not in hero.group(1),
+             "the hero card still shows the Question JSON format button")
+        need('href="#/archive"' not in hero.group(1),
+             "the hero card still shows the Archive (n) button")
         cards = CARD_RE.findall(dom)
         need(len(cards) >= 2, f"expected >= 2 rendered set cards, found {len(cards)}")
         for card in cards:
-            for label in (">Practice<", ">Review<", "btn-primary\" href=\"#/practice?set=", ">Review now<"):
-                need(label not in card, f"set card still renders a {label!r} control")
-            links = re.findall(r'href="#/practice\?set=', card)
-            need(len(links) == 1, f"set card has {len(links)} practice links, want exactly 1")
-            need("data-archive" in card, "set card lost its archive control")
+            need(">Practice<" in card, "a set card lost its Practice button")
+            need(">Review<" in card, "a set card lost its Review button")
+            need("data-archive" in card, "a set card lost its Archive button")
+            need('mode=review' in card, "the Review button does not open review mode")
+            need("card-hit" not in card, "a set card still has the whole-card overlay")
         # The archive tab sits between Progress and Settings.
         nav = re.search(r'<nav class="nav" id="nav">([\s\S]*?)</nav>', dom)
         need(nav is not None, "no nav element rendered")
@@ -407,7 +414,7 @@ def dom_home_cards() -> str:
              f"nav order is {[label for _, label in pairs]}")
         need([route for route, _ in pairs] == ["/", "/stats", "/archive", "/settings", "/format"],
              f"nav targets are {[route for route, _ in pairs]}")
-        return f"{len(cards)} cards, nav {' / '.join(label for _, label in pairs)}"
+        return f"{len(cards)} cards with 3 buttons each, hero clear, nav {' / '.join(label for _, label in pairs)}"
 
 
 @check("settings page: 10 per session by default and the practice-all switch")

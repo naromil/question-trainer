@@ -190,19 +190,9 @@ kbd {
   margin-bottom: .55rem;
 }
 .sets { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .75rem; }
-.set-card { display: flex; flex-direction: column; gap: .5rem; position: relative; }
+.set-card { display: flex; flex-direction: column; gap: .5rem; }
 .set-card h3 { margin: 0; font-size: 1rem; line-height: 1.3; }
 .set-card .meta { font-size: .8rem; color: var(--ink-3); }
-/* The whole card starts practice through an empty overlay link. Interactive
-   children (the due/archive controls) sit above it. */
-.card-hit { position: absolute; inset: 0; z-index: 1; border-radius: var(--radius); }
-.card-hit:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.set-card:hover, .set-card:focus-within {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 2px var(--blue-soft);
-}
-.set-card .row { position: relative; z-index: 2; }
-.set-card .tag.due { position: relative; z-index: 2; }
 
 /* ---------------------------------------------------------------- practice */
 /* Answering view is capped at ~78% of the 1000px shell (780px) so stems and

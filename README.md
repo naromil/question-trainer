@@ -44,7 +44,7 @@ origins.
 
 | Screen | What you get |
 |---|---|
-| **Sets** (home) | One card per active question set: mastery bar, tier, answered count, first-try accuracy and due count. Click a card to start practising the set; the due badge opens spaced review for what is due, and **Archive** stays a separate button. There is no mixed practice. |
+| **Sets** (home) | One card per active question set: mastery bar, tier, answered count, first-try accuracy and due count, with **Practice**, **Review** and **Archive** buttons. There is no mixed practice. |
 | **Session** | One set only. One question at a time with progress dots and an answering-time clock that pauses while you read feedback. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Choices can be crossed out (and un-crossed) before answering. |
 | **Results** | Score, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions**. |
 | **Archive** | Sets you archived, with their progress and a saved copy of their questions. **Restore** puts a set back on the active list. If the set is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
