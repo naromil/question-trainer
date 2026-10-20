@@ -1,40 +1,33 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (c) 2026 naromil
- * No College Board question content is distributed with this repository: the generated
- * data file app/data/questions.js is gitignored and local-only. See NOTICE.md.
  *
- * SAT Hard Mode - the app: routing, rendering, storage.
+ * Question Trainer - the app: routing, rendering, storage.
  *
- * Depends on window.SATBANK (generated data) and window.SATCore (pure logic).
- * All progress lives in localStorage. An in-flight session is only in memory:
- * a reload restarts the session, but every graded answer is already saved.
+ * Reads questions/sets.json at startup, depends on window.QTCore for the pure
+ * logic. Progress lives in localStorage. An in-flight session is only in
+ * memory: a reload restarts the session, but every graded answer is saved.
  */
 (function () {
   'use strict';
 
-  var C = window.SATCore;
-  var DATA = window.SATBANK;
+  var C = window.QTCore;
   var appEl = document.getElementById('app');
-  var navEl = document.getElementById('nav');
+  var noticeEl = document.getElementById('notice');
   var pillsEl = document.getElementById('pills');
 
-  if (!C || !DATA) {
-    appEl.innerHTML = '<div class="card"><h2>Could not load the trainer data</h2>' +
-      '<p>Expected <code>data/questions.js</code> next to this page. Regenerate it with ' +
-      '<code>python3 tools/build_app_data.py</code>.</p></div>';
+  if (!C) {
+    appEl.innerHTML = '<div class="card"><h2>Could not load the trainer logic</h2>' +
+      '<p>Expected <code>core.js</code> next to this page.</p></div>';
     return;
   }
 
-  var STATE_KEY = 'sattrainer.state.v1';
-  var QUESTIONS = DATA.questions;
-  var META = DATA.meta;
-  var BY_ID = {};
-  QUESTIONS.forEach(function (q) { BY_ID[q.id] = q; });
-
+  var STATE_KEY = 'questiontrainer.state.v1';
+  var BANK_URL = '../questions/sets.json';
+  var SOURCE_SETS = [];
+  var LOAD_ERRORS = [];
   var state = loadState();
   var session = null;
   var timer = null;
-  var VERDICT = ['A', 'B', 'C', 'D'];
 
   /* ------------------------------------------------------------ helpers */
   var ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -47,21 +40,22 @@
   function $$(selector, root) {
     return Array.prototype.slice.call((root || document).querySelectorAll(selector));
   }
-  function pct(n) { return Math.round(n) + '%'; }
   function fmtTime(ms) {
     var total = Math.max(0, Math.floor(ms / 1000));
     return Math.floor(total / 60) + ':' + ('0' + (total % 60)).slice(-2);
   }
+  function fmtDate(ms) {
+    try {
+      return new Date(ms).toLocaleDateString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric'
+      });
+    } catch (err) {
+      return '';
+    }
+  }
   function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
   function clampInt(n, lo, hi) { return Math.min(hi, Math.max(lo, n | 0)); }
-
-  function filters() {
-    return {
-      excludeFigure: state.settings.excludeFigure,
-      excludeUnderline: state.settings.excludeUnderline,
-      excludeRisky: state.settings.excludeRisky
-    };
-  }
+  function letterFor(index) { return C.letterFor(index); }
 
   /* ------------------------------------------------------------ storage */
   function loadState() {
@@ -71,7 +65,12 @@
   }
 
   function saveState() {
-    try { localStorage.setItem(STATE_KEY, JSON.stringify(state)); } catch (err) { /* quota/private mode */ }
+    try {
+      localStorage.setItem(STATE_KEY, JSON.stringify(state));
+      return true;
+    } catch (err) {
+      return false;
+    }
   }
 
   function clearStoredState() {
@@ -138,124 +137,53 @@
     if (card) card.classList.add(correct ? 'fx-correct' : 'fx-wrong');
   }
 
-  /* ------------------------------------------------------------ stimulus */
-  /* Escape first, then turn the OCR blank rules into a visible blank. */
-  function inline(text) {
-    return esc(text).replace(/_{4,}/g, '<span class="blank" aria-hidden="true"></span>');
-  }
-
-  /* The stimulus block. Items whose bank record draws a figure carry the bank's own
-   * markup (`stimulus_html`: inline SVG chart or a real table), which is exact where the
-   * OCR of the same screenshot row is chart noise. Everything else is OCR text. */
-  function stimulusHTML(question) {
-    if (question.stimulus_html) {
-      return '<div class="stimulus has-figure">' +
-        '<p class="figure-credit">Figure from the College Board question bank' +
-        (question.figure_kind === 'table' ? ' (table)' : ' (chart)') + '</p>' +
-        question.stimulus_html + '</div>';
+  /* ------------------------------------------------------------ data load */
+  async function loadBank() {
+    if (location.protocol === 'file:') {
+      LOAD_ERRORS.push('This page was opened from disk. Browsers block reading ' +
+        'questions/sets.json over file://. Serve the repository root over HTTP and open /app/.');
+      return;
     }
-    return '<div class="stimulus">' + stimulusTextHTML(question.stimulus) + '</div>';
-  }
-
-  /* Stimulus text keeps the OCR line breaks: single newlines are wraps inside
-   * a paragraph or bullet, blank lines separate blocks. */
-  function stimulusTextHTML(text) {
-    var html = '';
-    text.split(/\n{2,}/).forEach(function (block) {
-      var parts = [];
-      block.split('\n').forEach(function (raw) {
-        var line = raw.trim();
-        if (!line) return;
-        if (/^[•‣▪]/.test(line)) {
-          parts.push({ kind: 'li', text: line.replace(/^[•‣▪]\s*/, '') });
-          return;
-        }
-        if (/^Text \d+$/.test(line)) {
-          parts.push({ kind: 'label', text: line });
-          return;
-        }
-        var last = parts[parts.length - 1];
-        if (last && (last.kind === 'p' || last.kind === 'li')) last.text += ' ' + line;
-        else parts.push({ kind: 'p', text: line });
-      });
-      var inList = false;
-      parts.forEach(function (part) {
-        if (part.kind === 'li') {
-          if (!inList) { html += '<ul>'; inList = true; }
-          html += '<li>' + inline(part.text) + '</li>';
-          return;
-        }
-        if (inList) { html += '</ul>'; inList = false; }
-        html += part.kind === 'label'
-          ? '<p class="text-label">' + esc(part.text) + '</p>'
-          : '<p>' + inline(part.text) + '</p>';
-      });
-      if (inList) html += '</ul>';
-    });
-    return html;
-  }
-
-  /* Caveat badges for source-data problems the trainer cannot fix. Items that carry the
-   * bank's own figure markup have no such problem: the stimulusHTML credit says where
-   * the figure came from. */
-  function warningHTML(question) {
-    var flags = question.flags || [];
-    var notes = [];
-    if (flags.indexOf('figure') >= 0 && !question.figure_kind) {
-      notes.push('refers to a graph, table or figure — chart geometry is not in the ' +
-        'text data, so read the stem carefully');
+    var url = new URL(BANK_URL, location.href);
+    try {
+      var response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
+      var text = await response.text();
+      var raw;
+      try {
+        raw = JSON.parse(text);
+      } catch (err) {
+        throw new Error('invalid JSON: ' + err.message);
+      }
+      var bank = C.normalizeBank(raw);
+      SOURCE_SETS = bank.sets;
+      LOAD_ERRORS = bank.errors.map(function (error) { return error.message; });
+    } catch (err) {
+      LOAD_ERRORS.push('Could not read ' + url.pathname + ': ' + err.message);
     }
-    if (flags.indexOf('underline') >= 0) {
-      notes.push('refers to an underlined portion that OCR did not capture');
-    }
-    if (flags.indexOf('low-confidence') >= 0 || flags.indexOf('ocr-disagreement') >= 0) {
-      notes.push(question.figure_kind
-        ? 'carries OCR-quality warnings from the source screenshot — only its choices are ' +
-          'still OCR (see the Data page)'
-        : 'carries OCR-quality warnings (see the Data page)');
-    }
-    if (!notes.length) return '';
-    return '<div class="warnbox">Source-data caveat: this item ' + esc(notes.join('; ')) +
-      '.</div>';
   }
 
-  /* The explanation for one choice, rendered beneath that choice once the
-   * answer is known. '' when the rationale holds no text for the letter. */
-  function whyBlockHTML(parsed, letter) {
-    var text = letter === parsed.best ? parsed.bestText : (parsed.wrong[letter] || '');
-    if (!text) return '';
-    return '<div class="choice-why"><b>Why ' + letter + ' is ' +
-      (letter === parsed.best ? 'correct' : 'incorrect') + '.</b> ' + esc(text) + '</div>';
+  function noticeHTML() {
+    if (!LOAD_ERRORS.length) return '';
+    return '<div class="warnbox"><b>Question data problems</b><ul>' +
+      LOAD_ERRORS.map(function (error) { return '<li>' + esc(error) + '</li>'; }).join('') +
+      '</ul><p class="small">Edit <code>questions/sets.json</code>. ' +
+      '<a href="#/format">See the format</a>.</p></div>';
   }
 
-  /* Items whose rationale cannot be split per choice fall back to the raw
-   * analysis text, shown with the verdict. */
-  function fallbackRationaleHTML(question, parsed) {
-    if (parsed.parsed || !question.analysis) return '';
-    return '<div class="rationale"><p>' +
-      esc(question.analysis).replace(/\n{2,}/g, '</p><p>') + '</p></div>';
-  }
-
-  /* Read-only rendering of a question, used in review lists. */
-  function staticQuestionHTML(question) {
-    var parsed = C.parseRationale(question.analysis, question.answer);
-    var choices = question.choices.map(function (text, i) {
-      var letter = VERDICT[i];
-      var cls = letter === question.answer ? ' is-correct' : ' dimmed';
-      return '<li class="choice-item"><div class="choice-row is-static' + cls + '">' +
-        '<div class="choice"><span class="letter">' + letter + '</span>' +
-        '<span class="choice-text">' + inline(text) + '</span></div></div>' +
-        whyBlockHTML(parsed, letter) + '</li>';
-    }).join('');
-    return stimulusHTML(question) +
-      '<div class="stem">' + esc(question.stem) + '</div>' +
-      '<ul class="choices">' + choices + '</ul>' +
-      warningHTML(question) + fallbackRationaleHTML(question, parsed);
+  function renderNotice() {
+    if (noticeEl) noticeEl.innerHTML = noticeHTML();
   }
 
   /* ------------------------------------------------------------ chrome */
   function renderPills() {
-    var stats = C.overallStats(state, QUESTIONS);
+    var sets = C.allSets(state, SOURCE_SETS);
+    if (!pillsEl) return;
+    if (!sets.length) {
+      pillsEl.innerHTML = '';
+      return;
+    }
+    var stats = C.overallStats(state, sets);
     pillsEl.innerHTML =
       '<span class="pill" title="Questions answered at least once">' +
         stats.seen + '/' + stats.bankSize + ' seen</span>' +
@@ -268,7 +196,7 @@
   }
 
   function setActiveNav(path) {
-    /* The practice screen lives under /practice but belongs to "Practice". */
+    /* Practice belongs to the set list, not to its own nav entry. */
     var active = path === '/practice' ? '/' : path;
     $$('#nav a').forEach(function (link) {
       if (link.getAttribute('data-route') === active) link.setAttribute('aria-current', 'page');
@@ -281,7 +209,7 @@
   }
 
   /* The session clock measures answering time: it runs while a question is
-   * open and stops the moment the answer is graded, so reading the rationale
+   * open and stops the moment the answer is graded, so reading the explanation
    * never counts. `elapsed` holds the accumulated milliseconds. */
   function elapsedMs() {
     if (!session) return 0;
@@ -328,108 +256,199 @@
     pauseTimer();
     var route = parseHash();
     setActiveNav(route.path);
+    renderNotice();
     renderPills();
 
     /* Leaving practice abandons the finished session so the same link starts
      * a fresh one next time. */
-    if (route.path !== '/practice' && session && session.index >= session.ids.length) {
+    if (route.path !== '/practice' && session && session.index >= session.questions.length) {
       session = null;
     }
 
-    if (route.path === '/stats') renderStats();
+    if (route.path === '/archive') renderArchive();
+    else if (route.path === '/stats') renderStats();
     else if (route.path === '/settings') renderSettings(route);
-    else if (route.path === '/about') renderAbout();
+    else if (route.path === '/format') renderFormat();
     else if (route.path === '/practice') renderPractice(route.params);
     else renderHome();
     window.scrollTo(0, 0);
   }
 
   /* ------------------------------------------------------------ home */
-  function skillCard(row) {
+  function setCard(row) {
     var tier = row.tier;
-    var due = row.due
-      ? '<span class="tag due">' + row.due + ' due</span>'
-      : '';
-    return '<article class="card skill">' +
-      '<div class="spread"><h4>' + esc(row.skill) + '</h4>' +
+    var due = row.due ? '<span class="tag due">' + row.due + ' due</span>' : '';
+    return '<article class="card set-card">' +
+      '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
         '<span class="tag ' + tier.key + '">' + tier.label + '</span></div>' +
+      (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
       '<div class="bar tier-' + tier.key + '"><i style="width:' + row.points + '%"></i></div>' +
       '<div class="meta">' + row.points + '% mastery · ' +
-        row.attempted + '/' + row.total + ' attempted · ' +
+        row.attempted + '/' + row.total + ' answered · ' +
         row.accuracy + '% first try ' + due + '</div>' +
       '<div class="row">' +
-        '<a class="btn btn-sm btn-primary" href="#/practice?skill=' +
-          encodeURIComponent(row.skill) + '">Practice</a>' +
-        '<a class="btn btn-sm" href="#/practice?skill=' + encodeURIComponent(row.skill) +
+        '<a class="btn btn-sm btn-primary" href="#/practice?set=' +
+          encodeURIComponent(row.id) + '">Practice</a>' +
+        '<a class="btn btn-sm" href="#/practice?set=' + encodeURIComponent(row.id) +
           '&mode=review">Review</a>' +
-        '<a class="btn btn-ghost btn-sm" href="#/practice?skill=' +
-          encodeURIComponent(row.skill) + '&mode=weak">Mixed drill</a>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-archive="' +
+          esc(row.id) + '">Archive</button>' +
       '</div></article>';
   }
 
-  function renderHome() {
-    var stats = C.overallStats(state, QUESTIONS);
-    var rows = C.skillStats(state, QUESTIONS);
-    var byDomain = [];
-    rows.forEach(function (row) {
-      var group = byDomain.filter(function (g) { return g.domain === row.domain; })[0];
-      if (!group) { group = { domain: row.domain, rows: [] }; byDomain.push(group); }
-      group.rows.push(row);
+  function bindArchiveButtons() {
+    $$('[data-archive]', appEl).forEach(function (button) {
+      button.addEventListener('click', function () {
+        archiveSet(button.getAttribute('data-archive'));
+      });
     });
+  }
+
+  function archiveSet(setId) {
+    var set = C.findSet(state, SOURCE_SETS, setId);
+    if (!set) return;
+    if (!window.confirm('Archive "' + set.title + '"? You can restore it from the Archive page.')) {
+      return;
+    }
+    C.archiveSet(state, set, Date.now());
+    if (!saveState()) {
+      window.alert('The archive could not be saved because browser storage is full.');
+    }
+    render();
+  }
+
+  function renderHome() {
+    var active = C.activeSets(state, SOURCE_SETS);
+    var archived = C.archivedSets(state);
+    var all = C.allSets(state, SOURCE_SETS);
+    var stats = C.overallStats(state, all);
+    var rows = active.map(function (set) { return C.setStats(state, set, Date.now()); });
 
     var html = '<div class="hero">' +
-      '<div class="card"><h1>Hard questions only</h1>' +
-      '<p class="muted">' + META.count + ' ' + esc(META.section) + ' items at the ' +
-      '<b>' + esc(META.difficulty) + '</b> difficulty tier, every one with the official ' +
-      'College Board rationale. Answer, get graded, read why — then let spaced review ' +
-      'bring it back until it sticks.</p>' +
+      '<div class="card"><h1>Question Trainer</h1>' +
+      '<p class="muted">Pick one question set and work through it. Every session stays ' +
+      'inside that set; there is no mixed practice. Correct answers build mastery, ' +
+      'spaced review brings questions back, and finished sets can be archived.</p>' +
       '<div class="row">' +
-        '<a class="btn btn-primary" href="#/practice">Mixed practice</a>' +
-        '<a class="btn" href="#/practice?mode=review">' +
-          (stats.due ? 'Review due (' + stats.due + ')' : 'Review') + '</a>' +
-        '<a class="btn" href="#/practice?mode=weak">Weakest skills</a>' +
+        '<a class="btn btn-primary" href="#/format">Question JSON format</a>' +
+        (archived.length ? '<a class="btn" href="#/archive">Archive (' + archived.length +
+          ')</a>' : '') +
       '</div></div>' +
       '<div class="card"><div class="statgrid">' +
         '<div class="stat"><b>' + stats.seen + '<span class="muted">/' +
           stats.bankSize + '</span></b><span>questions seen</span></div>' +
-        '<div class="stat"><b>' + stats.accuracy + '%</b><span>correct</span></div>' +
-        '<div class="stat"><b>' + stats.mastered + '</b><span>skills mastered</span></div>' +
+        '<div class="stat"><b>' + stats.accuracy + '%</b><span>first-try correct</span></div>' +
+        '<div class="stat"><b>' + stats.mastered + '</b><span>sets mastered</span></div>' +
         '<div class="stat"><b>' + stats.due + '</b><span>due for review</span></div>' +
       '</div></div></div>';
 
-    byDomain.forEach(function (group) {
-      html += '<section class="domain"><h3>' + esc(group.domain) + '</h3>' +
-        '<div class="skills">' + group.rows.map(skillCard).join('') + '</div></section>';
-    });
+    if (rows.length) {
+      html += '<section class="set-list"><h2>Question sets</h2>' +
+        '<div class="sets">' + rows.map(setCard).join('') + '</div></section>';
+    } else {
+      html += '<div class="card"><h2>' +
+        (archived.length ? 'All sets are archived' : 'No question sets loaded') + '</h2>' +
+        '<p class="muted">' + (archived.length
+          ? 'Restore a set from the Archive to practice it again.'
+          : 'Add your sets to <code>questions/sets.json</code>, then reload the page. ' +
+            'The format is on the <a href="#/format">format page</a>.') + '</p>' +
+        (archived.length ? '<p><a class="btn btn-primary" href="#/archive">Open Archive</a></p>' : '') +
+        '</div>';
+    }
+
     appEl.innerHTML = html;
+    bindArchiveButtons();
+  }
+
+  /* ------------------------------------------------------------ archive */
+  function bindRestoreButtons() {
+    $$('[data-restore]', appEl).forEach(function (button) {
+      button.addEventListener('click', function () {
+        restoreSet(button.getAttribute('data-restore'));
+      });
+    });
+  }
+
+  function restoreSet(setId) {
+    var source = null;
+    for (var i = 0; i < SOURCE_SETS.length; i++) {
+      if (SOURCE_SETS[i].id === setId) { source = SOURCE_SETS[i]; break; }
+    }
+    C.restoreSet(state, setId, source, Date.now());
+    saveState();
+    render();
+  }
+
+  function renderArchive() {
+    var rows = C.archivedSets(state);
+    var now = Date.now();
+    var html = '<div class="card"><h1>Archive</h1>' +
+      '<p class="muted">Archived sets keep their question copy and progress in this ' +
+      'browser. Restore one to put it back on the set list.</p></div>';
+
+    if (!rows.length) {
+      html += '<div class="card"><h2>Nothing archived</h2>' +
+        '<p class="muted">Archive a finished set from its card on the <a href="#/">set list</a>.</p>' +
+        '</div>';
+    } else {
+      rows.forEach(function (set) {
+        var row = C.setStats(state, set, now);
+        var inSource = SOURCE_SETS.some(function (source) { return source.id === set.id; });
+        html += '<article class="card set-card">' +
+          '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
+            '<span class="tag archived">archived</span></div>' +
+          (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
+          '<p class="small muted">Archived ' + esc(fmtDate(set.archivedAt)) + '. ' +
+            (inSource
+              ? 'The source set is still listed in <code>questions/sets.json</code>.'
+              : 'The source set is no longer listed; the archived copy is kept in this browser.') +
+          '</p>' +
+          '<div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
+            '%"></i></div>' +
+          '<div class="meta">' + row.points + '% mastery · ' +
+            row.attempted + '/' + row.total + ' answered · ' +
+            row.accuracy + '% first try' + (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
+          '<div class="row">' +
+            '<a class="btn btn-sm btn-primary" href="#/practice?set=' +
+              encodeURIComponent(row.id) + '">Practice</a>' +
+            '<a class="btn btn-sm" href="#/practice?set=' + encodeURIComponent(row.id) +
+              '&mode=review">Review</a>' +
+            '<button type="button" class="btn btn-sm" data-restore="' + esc(row.id) +
+              '">Restore</button>' +
+          '</div></article>';
+      });
+    }
+
+    appEl.innerHTML = html;
+    bindRestoreButtons();
   }
 
   /* ------------------------------------------------------------ practice */
   function sameCfg(a, b) {
-    return a && a.skill === b.skill && a.mode === b.mode && a.length === b.length;
+    return a && a.setId === b.setId && a.mode === b.mode && a.length === b.length;
   }
 
   function createSession(cfg, preselect) {
-    var questions = preselect || C.selectSession(state, QUESTIONS, {
-      skill: cfg.skill,
-      mode: cfg.mode,
+    var set = C.findSet(state, SOURCE_SETS, cfg.setId);
+    if (!set) return null;
+    var questions = preselect || C.selectSession(state, set.id, set.questions, {
+      mode: cfg.mode === 'review' ? 'review' : 'practice',
       length: cfg.length,
-      filters: filters(),
       now: Date.now()
     });
     session = {
       cfg: cfg,
-      ids: questions.map(function (q) { return q.id; }),
+      set: set,
+      questions: questions,
       index: 0,
       results: [],
       selected: null,
       excluded: {},
       checked: false,
       elapsed: 0,
-      runningSince: null,
-      retry: !!preselect
+      runningSince: null
     };
-    if (session.ids.length) {
+    if (session.questions.length) {
       state.totals.sessions += 1;
       saveState();
     }
@@ -438,42 +457,61 @@
 
   function modeLabel(mode) {
     if (mode === 'review') return 'Spaced review';
-    if (mode === 'weak') return 'Weakest skills';
     if (mode === 'retry') return 'Retry misses';
     return 'Practice';
   }
 
   function sessionTitle() {
-    return session.cfg.skill || 'Mixed — all 10 skills';
+    return session ? session.set.title : '';
+  }
+
+  function renderMissingSet(setId) {
+    appEl.innerHTML = '<div class="card"><h2>Question set not found</h2>' +
+      '<p>No set with id <code>' + esc(setId) + '</code> is loaded from ' +
+      '<code>questions/sets.json</code> or archived.</p>' +
+      '<p><a class="btn btn-primary" href="#/">Back to sets</a></p></div>';
+  }
+
+  function renderEmptySession() {
+    var review = session && session.cfg.mode === 'review';
+    appEl.innerHTML = '<div class="card"><h2>' +
+      (review ? 'Nothing is due for review' : 'Nothing to practice here') + '</h2>' +
+      '<p class="muted">' + (review
+        ? 'Every question in this set that you have answered is scheduled for a later date. ' +
+          'Missed questions come back immediately; the rest come back within a day or two.'
+        : 'This set has no questions to serve.') + '</p>' +
+      '<div class="row">' +
+        '<a class="btn btn-primary" href="#/practice?set=' +
+          encodeURIComponent(session ? session.cfg.setId : '') + '">Practice this set</a>' +
+        '<a class="btn" href="#/">Back to sets</a>' +
+      '</div></div>';
   }
 
   function renderPractice(params) {
+    var setId = params.get('set') || '';
+    var set = C.findSet(state, SOURCE_SETS, setId);
+    if (!set) { renderMissingSet(setId); return; }
+
+    var mode = params.get('mode');
+    if (mode !== 'review' && mode !== 'retry') mode = 'practice';
+    if (mode === 'retry' && (!session || session.cfg.setId !== setId ||
+        session.cfg.mode !== 'retry')) {
+      mode = 'practice';
+    }
     var cfg = {
-      skill: params.get('skill') || null,
-      mode: params.get('mode') || 'practice',
+      setId: set.id,
+      mode: mode,
       length: clampInt(parseInt(params.get('n'), 10) || state.settings.length, 1, 50)
     };
     if (!session || !sameCfg(session.cfg, cfg)) createSession(cfg);
 
-    if (!session.ids.length) {
-      var nothingDue = session.cfg.mode === 'review';
-      appEl.innerHTML = '<div class="card"><h2>' +
-        (nothingDue ? 'Nothing is due for review' : 'Nothing to practice here') + '</h2>' +
-        '<p class="muted">' + (nothingDue
-          ? 'Every question you have answered is scheduled for a later date. Missed ' +
-            'questions come back immediately; the rest come back within a day or two.'
-          : 'No questions match this filter combination.') + '</p>' +
-        '<p><a class="btn btn-primary" href="#/">Back to practice</a>' +
-        (nothingDue ? '' : ' <a class="btn" href="#/settings">Change filters</a>') +
-        '</p></div>';
-      return;
-    }
-    if (session.index >= session.ids.length) { renderResults(); return; }
+    if (!session || !session.questions.length) { renderEmptySession(); return; }
+    if (session.index >= session.questions.length) { renderResults(); return; }
 
     appEl.innerHTML =
       '<div class="practice-view">' +
         '<div class="prac-head">' +
-          '<a class="btn btn-ghost btn-sm" href="#/">← Exit</a>' +
+          '<a class="btn btn-ghost btn-sm" href="#/">← Sets</a>' +
           '<div><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
             esc(modeLabel(session.cfg.mode)) + '</span></div>' +
           '<div class="dots" id="dots"></div>' +
@@ -495,74 +533,73 @@
   function renderDots() {
     var dots = document.getElementById('dots');
     if (!dots) return;
-    dots.innerHTML = session.ids.map(function (id, i) {
+    dots.innerHTML = session.questions.map(function (question, i) {
       var result = resultAt(i);
       var cls = result ? (result.correct ? 'correct' : 'wrong')
         : (i === session.index && !session.checked ? 'current' : '');
-      var question = BY_ID[id];
-      return '<span class="dot ' + cls + '" title="' + esc(question.skill + ' · ' +
-        question.set + ' #' + question.number) + '"></span>';
+      var status = result ? (result.correct ? 'correct' : 'incorrect') : 'not answered';
+      var title = 'Question ' + (i + 1) + ' · ' + status + ' · ' +
+        question.question.slice(0, 60);
+      return '<span class="dot ' + cls + '" title="' + esc(title) + '"></span>';
     }).join('');
   }
 
   /* The row carries every state class; the choice button inside it chooses the
    * answer and the trailing button is the cross-out toggle. */
-  function rowClass(letter, index, question) {
+  function rowClass(index, question) {
     var cls = session.checked ? 'choice-row' : 'choice-row live';
     if (session.excluded[index]) cls += ' is-excluded';
     if (!session.checked) return cls + (index === session.selected ? ' selected' : '');
-    if (letter === question.answer) return cls + ' is-correct';
+    if (index === question.answer) return cls + ' is-correct';
     if (index === session.selected) return cls + ' is-wrong';
     return cls + ' dimmed';
   }
 
-  /* Bluebook's Option Eliminator ("ABC" button): cross out the choices you have
-   * ruled out. It is undoable and never changes the answer by itself. */
+  /* Option eliminator: cross out the choices you have ruled out. It is
+   * undoable and never changes the answer by itself. */
   function elimHTML(index, letter) {
     var excluded = !!session.excluded[index];
     var label = (excluded ? 'Include' : 'Exclude') + ' choice ' + letter;
     return '<button type="button" class="elim" data-exclude="' + index + '"' +
       ' aria-pressed="' + (excluded ? 'true' : 'false') + '" aria-label="' + label +
-      '" title="' + label + '"><span aria-hidden="true">ABC</span></button>';
+      '" title="' + label + '"><span aria-hidden="true">✕</span></button>';
   }
 
-  function choiceHTML(letter, index, question, text) {
-    return '<div class="' + rowClass(letter, index, question) + '">' +
+  function choiceHTML(index, question, text) {
+    var letter = letterFor(index);
+    return '<div class="' + rowClass(index, question) + '">' +
       '<button type="button" class="choice" data-i="' + index + '" aria-pressed="false">' +
         '<span class="letter">' + letter + '</span>' +
-        '<span class="choice-text">' + inline(text) + '</span></button>' +
+        '<span class="choice-text">' + esc(text) + '</span></button>' +
       elimHTML(index, letter) + '</div>';
   }
 
   function showQuestion(index) {
-    var question = BY_ID[session.ids[index]];
+    var question = session.questions[index];
     session.selected = null;
     session.checked = false;
     session.excluded = {};
     renderDots();
 
     var choices = question.choices.map(function (text, i) {
-      var letter = VERDICT[i];
-      return '<li class="choice-item">' + choiceHTML(letter, i, question, text) + '</li>';
+      return '<li class="choice-item">' + choiceHTML(i, question, text) + '</li>';
     }).join('');
 
     var card = document.getElementById('qcard');
     card.className = 'card';
     card.innerHTML =
       '<div class="q-meta">' +
-        '<span class="tag">' + esc(question.skill) + '</span>' +
-        '<span class="tag">' + esc(question.set) + ' · Q' + esc(question.number) + '</span>' +
-        '<span class="tag">' + (index + 1) + ' of ' + session.ids.length + '</span>' +
+        '<span class="tag">' + esc(session.set.title) + '</span>' +
+        '<span class="tag">' + (index + 1) + ' of ' + session.questions.length + '</span>' +
       '</div>' +
-      warningHTML(question) +
-      stimulusHTML(question) +
-      '<div class="stem">' + esc(question.stem) + '</div>' +
+      passageHTML(question.passage) +
+      '<div class="stem">' + esc(question.question) + '</div>' +
       '<ul class="choices" id="choices">' + choices + '</ul>' +
       '<div class="actions">' +
         '<button type="button" class="btn btn-primary" id="action" disabled>' +
           'Check answer</button>' +
-        '<span class="kbdhint"><kbd>A</kbd>–<kbd>D</kbd> choose · ' +
-          '<kbd>Enter</kbd> check / next</span>' +
+        '<span class="kbdhint"><kbd>A</kbd>–<kbd>Z</kbd> choose · ' +
+          '<kbd>1</kbd>–<kbd>9</kbd> choose · <kbd>Enter</kbd> check / next</span>' +
       '</div>' +
       '<div id="feedback" aria-live="polite"></div>';
 
@@ -582,12 +619,12 @@
 
   /* Re-paint every row from the session state, including the cross-out buttons. */
   function syncChoices() {
-    var question = BY_ID[session.ids[session.index]];
+    var question = session.questions[session.index];
     $$('#choices .choice-row').forEach(function (row, i) {
-      var letter = VERDICT[i];
+      var letter = letterFor(i);
       var excluded = !!session.excluded[i];
       var label = (excluded ? 'Include' : 'Exclude') + ' choice ' + letter;
-      row.className = rowClass(letter, i, question);
+      row.className = rowClass(i, question);
       var choice = $('.choice', row);
       choice.setAttribute('aria-pressed', String(i === session.selected));
       choice.disabled = session.checked;
@@ -624,36 +661,108 @@
     else nextQuestion();
   }
 
+  function textWithBreaks(value) {
+    return esc(value).replace(/\n/g, '<br>');
+  }
+
+  function whyBlockHTML(question, index) {
+    var text = question.explanations ? question.explanations[index] : '';
+    if (!text) return '';
+    var letter = letterFor(index);
+    return '<div class="choice-why"><b>Choice ' + letter + ' is ' +
+      (index === question.answer ? 'correct' : 'incorrect') + '.</b> ' +
+      textWithBreaks(text) + '</div>';
+  }
+
+  function explanationHTML(question) {
+    if (!question.explanation) return '';
+    return '<div class="explanation">' +
+      question.explanation.split(/\n{2,}/).map(function (block) {
+        return '<p>' + textWithBreaks(block) + '</p>';
+      }).join('') + '</div>';
+  }
+
+  /* Read-only rendering of a question, used in review lists. */
+  function staticQuestionHTML(question) {
+    var choices = question.choices.map(function (text, i) {
+      var letter = letterFor(i);
+      var cls = i === question.answer ? ' is-correct' : ' dimmed';
+      return '<li class="choice-item"><div class="choice-row is-static' + cls + '">' +
+        '<div class="choice"><span class="letter">' + letter + '</span>' +
+        '<span class="choice-text">' + esc(text) + '</span></div></div>' +
+        whyBlockHTML(question, i) + '</li>';
+    }).join('');
+    return passageHTML(question.passage) +
+      '<div class="stem">' + esc(question.question) + '</div>' +
+      '<ul class="choices">' + choices + '</ul>' +
+      explanationHTML(question);
+  }
+
+  /* The stimulus block: blank lines separate paragraphs, lines starting with a
+   * bullet become a list, and consecutive lines join into one paragraph. */
+  function passageHTML(text) {
+    if (!text) return '';
+    return '<div class="stimulus">' + richTextHTML(text) + '</div>';
+  }
+
+  function richTextHTML(value) {
+    var html = '';
+    value.split(/\n{2,}/).forEach(function (block) {
+      var parts = [];
+      block.split('\n').forEach(function (raw) {
+        var line = raw.trim();
+        if (!line) return;
+        var bullet = /^[•‣▪]\s*/.exec(line);
+        if (bullet) {
+          parts.push({ kind: 'li', text: line.slice(bullet[0].length) });
+          return;
+        }
+        var last = parts[parts.length - 1];
+        if (last && last.kind === 'p') last.text += ' ' + line;
+        else parts.push({ kind: 'p', text: line });
+      });
+      var inList = false;
+      parts.forEach(function (part) {
+        if (part.kind === 'li') {
+          if (!inList) { html += '<ul>'; inList = true; }
+          html += '<li>' + esc(part.text) + '</li>';
+          return;
+        }
+        if (inList) { html += '</ul>'; inList = false; }
+        html += '<p>' + esc(part.text) + '</p>';
+      });
+      if (inList) html += '</ul>';
+    });
+    return html;
+  }
+
   function checkAnswer() {
     if (session.checked || session.selected == null) return;
-    var question = BY_ID[session.ids[session.index]];
-    var result = C.applyAnswer(state, question, session.selected, Date.now());
+    var question = session.questions[session.index];
+    var result = C.applyAnswer(state, session.set.id, question, session.selected, Date.now());
     session.checked = true;
     pauseTimer();
 
     var record = {
       index: session.index,
-      id: question.id,
-      skill: question.skill,
+      question: question,
       chosen: result.chosen,
       correct: result.correct,
       expected: result.expected,
-      pointsDelta: result.pointsDelta,
-      pointsBefore: result.pointsBefore,
-      pointsAfter: result.pointsAfter,
-      coin: result.coin
+      pointsDelta: result.pointsDelta
     };
     session.results.push(record);
     saveState();
     renderPills();
 
-    var parsed = C.parseRationale(question.analysis, question.answer);
     syncChoices();
     $$('#choices .choice-item').forEach(function (item, i) {
-      item.insertAdjacentHTML('beforeend', whyBlockHTML(parsed, VERDICT[i]));
+      if (question.explanations && question.explanations[i]) {
+        item.insertAdjacentHTML('beforeend', whyBlockHTML(question, i));
+      }
     });
 
-    var last = session.index === session.ids.length - 1;
+    var last = session.index === session.questions.length - 1;
     var actionBtn = document.getElementById('action');
     actionBtn.textContent = last ? 'See results' : 'Next question';
     actionBtn.disabled = false;
@@ -661,7 +770,7 @@
     var mastery = result.pointsDelta === 0
       ? '<span class="muted">mastery unchanged (already at 0 or 100)</span>'
       : (result.pointsDelta > 0 ? '+' : '') + result.pointsDelta + ' mastery in ' +
-        esc(question.skill) + ' → ' + result.pointsAfter + '%';
+        esc(session.set.title) + ' → ' + result.pointsAfter + '%';
 
     var gapDays = C.SRS_INTERVALS_DAYS[result.boxAfter];
     var when = gapDays === 0
@@ -676,7 +785,7 @@
             : 'Not quite — the answer is ' + result.expected +
               (result.chosen !== result.expected ? ' (you chose ' + result.chosen + ')' : '')) +
         '</div>' +
-        fallbackRationaleHTML(question, parsed) +
+        explanationHTML(question) +
         '<div class="small muted" style="margin-top:.6rem">' + mastery + ' · ' + when +
         '</div>' +
       '</div>';
@@ -688,7 +797,7 @@
   function nextQuestion() {
     if (!session.checked) return;
     session.index += 1;
-    if (session.index >= session.ids.length) renderResults();
+    if (session.index >= session.questions.length) renderResults();
     else showQuestion(session.index);
     window.scrollTo(0, 0);
   }
@@ -700,53 +809,45 @@
     var missed = results.filter(function (r) { return !r.correct; });
     var percent = results.length ? Math.round((correct / results.length) * 100) : 0;
 
-    var bySkill = {};
-    results.forEach(function (r) {
-      bySkill[r.skill] = (bySkill[r.skill] || 0) + r.pointsDelta;
-    });
-    var deltas = Object.keys(bySkill).map(function (skill) {
-      var delta = bySkill[skill];
-      return '<span class="tag ' + (delta > 0 ? 'mastered' : delta < 0 ? 'warn' : '') + '">' +
-        esc(skill) + ' ' + (delta > 0 ? '+' : '') + delta + '</span>';
-    }).join(' ');
+    var delta = results.reduce(function (sum, r) { return sum + r.pointsDelta; }, 0);
+    var deltas = delta === 0 ? ''
+      : '<span class="tag ' + (delta > 0 ? 'mastered' : 'warn') + '">' +
+        esc(sessionTitle()) + ' ' + (delta > 0 ? '+' : '') + delta + '</span>';
 
     var rows = results.map(function (r, i) {
-      var question = BY_ID[r.id];
+      var question = r.question;
       return '<div class="result-row">' +
         '<span class="n">' + (i + 1) + '</span>' +
         '<span class="' + (r.correct ? 'ok' : 'no') + '">' + (r.correct ? '✓' : '✗') + '</span>' +
-        '<span class="grow">' + esc(question.skill) + ' — ' + esc(question.stem.slice(0, 70)) +
-          (question.stem.length > 70 ? '…' : '') + '</span>' +
+        '<span class="grow">' + esc(question.question.slice(0, 80)) +
+          (question.question.length > 80 ? '…' : '') + '</span>' +
         '<span class="muted small">' + r.chosen +
           (r.correct ? '' : ' → ' + r.expected) + '</span>' +
       '</div>';
     }).join('');
 
     var review = missed.map(function (r) {
-      var question = BY_ID[r.id];
       return '<div class="review-item"><div class="q-meta"><span class="tag">' +
-        esc(question.skill) + '</span><span class="tag">' + esc(question.set) + ' · Q' +
-        esc(question.number) + '</span><span class="tag warn">you chose ' + r.chosen +
-        '</span></div>' + staticQuestionHTML(question) + '</div>';
+        esc(sessionTitle()) + '</span><span class="tag warn">you chose ' + r.chosen +
+        '</span></div>' + staticQuestionHTML(r.question) + '</div>';
     }).join('');
 
     var time = fmtTime(elapsedMs());
-
     appEl.innerHTML =
       '<div class="card"><div class="spread"><h1>Session complete</h1>' +
-        '<span class="muted">' + esc(sessionTitle()) + ' · ' + esc(modeLabel(session.cfg.mode)) +
-        ' · ' + time + '</span></div>' +
+        '<span class="muted">' + esc(sessionTitle()) + ' · ' +
+        esc(modeLabel(session.cfg.mode)) + ' · ' + time + '</span></div>' +
       '<div class="statgrid">' +
-        '<div class="stat"><b>' + correct + '/' + results.length + '</b><span>correct</span></div>' +
+        '<div class="stat"><b>' + correct + '/' + results.length +
+          '</b><span>correct</span></div>' +
         '<div class="stat"><b>' + percent + '%</b><span>this session</span></div>' +
         '<div class="stat"><b>' + missed.length + '</b><span>coming back in review</span></div>' +
       '</div>' +
       '<div class="row" style="margin-top:.9rem">' +
         (missed.length ? '<button class="btn btn-primary" id="retry">Retry the ' +
           plural(missed.length, 'missed question') + '</button>' : '') +
-        '<a class="btn" href="#/practice?skill=' + encodeURIComponent(session.cfg.skill || '') +
-          '&mode=' + esc(session.cfg.mode) + '">Practice again</a>' +
-        '<a class="btn btn-ghost" href="#/">Back to skills</a>' +
+        '<button type="button" class="btn" id="again">Practice again</button>' +
+        '<a class="btn btn-ghost" href="#/">Back to sets</a>' +
       '</div>' +
       (deltas ? '<div class="row" style="margin-top:.7rem">' +
         '<span class="muted small">Mastery:</span>' + deltas + '</div>' : '') +
@@ -754,13 +855,21 @@
       '<div class="card"><h3>Question by question</h3>' + rows + '</div>' +
       (review ? '<div class="card"><h3>Review your misses</h3>' + review + '</div>' : '');
 
+    var again = document.getElementById('again');
+    if (again) {
+      again.addEventListener('click', function () {
+        session = null;
+        render();
+      });
+    }
+
     var retry = document.getElementById('retry');
     if (retry) {
       retry.addEventListener('click', function () {
-        var questions = missed.map(function (r) { return BY_ID[r.id]; });
-        var skill = session.cfg.skill;
-        createSession({ skill: skill, mode: 'retry', length: questions.length }, questions);
-        location.hash = '#/practice?skill=' + encodeURIComponent(skill || '') +
+        var setId = session.set.id;
+        var questions = missed.map(function (r) { return r.question; });
+        createSession({ setId: setId, mode: 'retry', length: questions.length }, questions);
+        location.hash = '#/practice?set=' + encodeURIComponent(setId) +
           '&mode=retry&n=' + questions.length;
         render();
       });
@@ -769,11 +878,12 @@
 
   /* ------------------------------------------------------------ stats */
   function renderStats() {
-    var stats = C.overallStats(state, QUESTIONS);
-    var rows = C.skillStats(state, QUESTIONS);
+    var sets = C.allSets(state, SOURCE_SETS);
+    var stats = C.overallStats(state, sets);
+    var rows = C.allSetStats(state, sets);
     var days = C.activity(state, 14);
     var peak = days.reduce(function (n, day) { return Math.max(n, day.a); }, 0);
-    var trouble = C.troubleSpots(state, QUESTIONS, 8);
+    var trouble = C.troubleSpots(state, sets, 8);
 
     var activity = '<div class="spark">' + days.map(function (day) {
       var h = peak ? Math.round((day.a / peak) * 100) : 0;
@@ -785,8 +895,9 @@
       '<span>' + stats.answered + ' answers total</span>' +
       '<span>today</span></div>';
 
-    var table = rows.map(function (row) {
-      return '<tr><td>' + esc(row.skill) + '</td>' +
+    var table = rows.length ? rows.map(function (row) {
+      return '<tr><td>' + esc(row.title) +
+        (row.archived ? ' <span class="tag">archived</span>' : '') + '</td>' +
         '<td><div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
           '%"></i></div></td>' +
         '<td class="num">' + row.points + '%</td>' +
@@ -794,13 +905,12 @@
         '<td class="num">' + row.attempted + '/' + row.total + '</td>' +
         '<td class="num">' + (row.attempted ? row.accuracy + '%' : '—') + '</td>' +
         '<td class="num">' + (row.due || '—') + '</td></tr>';
-    }).join('');
+    }).join('') : '<tr><td colspan="7" class="muted">No sets loaded.</td></tr>';
 
     var troubleHTML = trouble.length ? trouble.map(function (row) {
-      return '<details class="review-item"><summary>' + esc(row.q.skill) + ' · Q' +
-        esc(row.q.number) + ' — missed ' + row.wrong + ' of ' + row.attempts +
-        ' attempts</summary><div style="margin-top:.7rem">' +
-        staticQuestionHTML(row.q) + '</div></details>';
+      return '<details class="review-item"><summary>' + esc(row.set.title) + ' — missed ' +
+        row.wrong + ' of ' + row.attempts + ' attempts</summary>' +
+        '<div style="margin-top:.7rem">' + staticQuestionHTML(row.q) + '</div></details>';
     }).join('') : '<p class="muted small">No repeated misses yet.</p>';
 
     appEl.innerHTML =
@@ -810,12 +920,12 @@
         '<div class="stat"><b>' + stats.accuracy + '%</b><span>first-try correct</span></div>' +
         '<div class="stat"><b>' + stats.seen + '/' + stats.bankSize +
           '</b><span>questions seen</span></div>' +
-        '<div class="stat"><b>' + stats.mastered + '</b><span>skills mastered</span></div>' +
+        '<div class="stat"><b>' + stats.mastered + '</b><span>sets mastered</span></div>' +
         '<div class="stat"><b>' + stats.streak + '</b><span>day streak</span></div>' +
         '<div class="stat"><b>' + stats.due + '</b><span>due now</span></div>' +
       '</div></div>' +
       '<div class="card"><h3>Last 14 days</h3>' + activity + '</div>' +
-      '<div class="card"><h3>Skills</h3><table><thead><tr><th>Skill</th><th></th>' +
+      '<div class="card"><h3>Sets</h3><table><thead><tr><th>Set</th><th></th>' +
         '<th class="num">Mastery</th><th>Tier</th><th class="num">Seen</th>' +
         '<th class="num">First try</th><th class="num">Due</th></tr></thead><tbody>' +
         table + '</tbody></table></div>' +
@@ -823,23 +933,17 @@
   }
 
   /* ------------------------------------------------------------ settings */
-  function filterCount(predicate) {
-    return QUESTIONS.filter(predicate).length;
-  }
-
   function renderSettings(route) {
-    var risky = filterCount(function (q) { return C.isExcluded(q, { excludeRisky: true }); });
-    var figures = filterCount(function (q) { return C.isExcluded(q, { excludeFigure: true }); });
-    var underlines = filterCount(function (q) { return C.isExcluded(q, { excludeUnderline: true }); });
+    var lengths = C.SESSION_LENGTHS.map(function (n) {
+      return '<option value="' + n + '"' + (state.settings.length === n ? ' selected' : '') +
+        '>' + n + '</option>';
+    }).join('');
 
     appEl.innerHTML =
       '<div class="card"><h1>Settings</h1>' +
       '<h4>Session</h4>' +
       '<label class="field">Questions per session <select id="length">' +
-        [4, 8, 12, 20].map(function (n) {
-          return '<option value="' + n + '"' + (state.settings.length === n ? ' selected' : '') +
-            '>' + n + '</option>';
-        }).join('') + '</select></label>' +
+        lengths + '</select></label>' +
       '<label class="field">Theme <select id="theme">' +
         ['auto', 'light', 'dark'].map(function (theme) {
           return '<option value="' + theme + '"' +
@@ -850,33 +954,25 @@
         (state.settings.sound ? ' checked' : '') + '> Sound effect on a correct and on a ' +
         'wrong answer <span class="muted small">(right and wrong also flash the card; the ' +
         'clock pauses while you read the feedback either way)</span></label>' +
-      '<h4 style="margin-top:1.1rem">Question filters</h4>' +
-      '<p class="muted small">Items are excluded from every session (practice, review and ' +
-        'drills) when a filter is on.</p>' +
-      '<label class="field"><input type="checkbox" id="f-figure"' +
-        (state.settings.excludeFigure ? ' checked' : '') + '> Skip items that refer to a ' +
-        'graph, table or figure <span class="muted small">(' + figures + ')</span></label>' +
-      '<label class="field"><input type="checkbox" id="f-underline"' +
-        (state.settings.excludeUnderline ? ' checked' : '') + '> Skip items that refer to an ' +
-        'underlined portion <span class="muted small">(' + underlines + ')</span></label>' +
-      '<label class="field"><input type="checkbox" id="f-risky"' +
-        (state.settings.excludeRisky ? ' checked' : '') + '> Skip items with OCR warnings ' +
-        '<span class="muted small">(' + risky + ')</span></label>' +
       '</div>' +
+      '<div class="card"><h3>Question data</h3>' +
+      '<p class="small muted">Loaded <b>' + SOURCE_SETS.length + '</b> ' +
+        (SOURCE_SETS.length === 1 ? 'set' : 'sets') +
+        ' from <code>questions/sets.json</code>.' +
+        (LOAD_ERRORS.length ? ' <b>' + LOAD_ERRORS.length + '</b> data ' +
+          plural(LOAD_ERRORS.length, 'problem') + ' — see the banner at the top.' : '') +
+        ' <a href="#/format">JSON format</a>.</p>' +
+      '<p class="small muted">There is no mixed practice: each session draws only from the ' +
+        'set you choose.</p></div>' +
       '<div class="card"><h3>Progress data</h3>' +
       '<p class="muted small">Everything is stored in this browser only. Back it up as JSON ' +
-        'if you switch machines or clear site data.</p>' +
+        'if you switch machines or clear site data. Archived sets are included in the export.</p>' +
       '<div class="row"><button class="btn" id="export">Export JSON</button>' +
         '<button class="btn" id="import-btn">Import JSON</button>' +
-        '<button class="btn" id="reset">Reset progress</button>' +
+        '<button class="btn" id="reset">Reset all data</button>' +
         '<input type="file" id="import-file" accept="application/json" hidden></div>' +
       '<p class="small muted" id="note" style="margin-top:.7rem"></p>' +
-      '</div>' +
-      '<div class="card"><h3>Question bank</h3>' +
-      '<p class="small muted">' + META.count + ' hard ' + esc(META.section) + ' items · ' +
-        'source <code>' + esc(META.source) + '</code> · generated ' +
-        esc(META.generated) + ' · ' + META.answers_recovered_from_rationale +
-        ' answers recovered from rationales. See <a href="#/about">Data</a>.</p></div>';
+      '</div>';
 
     var note = document.getElementById('note');
     $('#length').addEventListener('change', function (event) {
@@ -894,19 +990,11 @@
       /* Switching it on plays the chime once, so the setting proves itself. */
       if (state.settings.sound) playVerdict(true);
     });
-    [['f-figure', 'excludeFigure'], ['f-underline', 'excludeUnderline'],
-      ['f-risky', 'excludeRisky']].forEach(function (pair) {
-      $('#' + pair[0]).addEventListener('change', function (event) {
-        state.settings[pair[1]] = event.target.checked;
-        saveState();
-        renderSettings(route);
-      });
-    });
     $('#export').addEventListener('click', function () {
       var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
       var link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'sat-hard-mode-progress.json';
+      link.download = 'question-trainer-progress.json';
       link.click();
       URL.revokeObjectURL(link.href);
     });
@@ -919,19 +1007,24 @@
       file.text().then(function (text) {
         var parsed = null;
         try { parsed = JSON.parse(text); } catch (err) { parsed = null; }
-        if (!parsed || typeof parsed !== 'object') {
-          note.textContent = 'That file is not valid JSON.';
+        if (!parsed || typeof parsed !== 'object' || parsed.app !== C.STATE_APP ||
+            parsed.v !== C.STATE_VERSION) {
+          note.textContent = 'That file is not a progress export from this version.';
           return;
         }
         state = C.sanitizeState(parsed, Date.now());
-        saveState();
+        var saved = saveState();
+        applyTheme();
         renderPills();
         note.textContent = 'Imported: ' + state.totals.a + ' answers, ' +
-          state.totals.sessions + ' sessions.';
+          state.totals.sessions + ' sessions, ' +
+          Object.keys(state.archived).length + ' archived sets.' +
+          (saved ? '' : ' The browser could not save it (storage is full).');
       });
     });
     $('#reset').addEventListener('click', function () {
-      if (!window.confirm('Delete all practice history in this browser?')) return;
+      if (!window.confirm('Delete all practice history, progress and archived copies? ' +
+          'Your source sets stay in questions/sets.json.')) return;
       clearStoredState();
       state = C.emptyState(Date.now());
       session = null;
@@ -941,96 +1034,94 @@
     });
   }
 
-  /* ------------------------------------------------------------ about */
-  function renderAbout() {
-    var flagCounts = {};
-    QUESTIONS.forEach(function (q) {
-      (q.flags || []).forEach(function (flag) {
-        flagCounts[flag] = (flagCounts[flag] || 0) + 1;
-      });
-    });
-    var flags = Object.keys(flagCounts).sort(function (a, b) {
-      return flagCounts[b] - flagCounts[a];
-    }).map(function (flag) {
-      return '<span class="tag">' + esc(flag) + ' · ' + flagCounts[flag] + '</span>';
-    }).join(' ');
-
-    var figureItems = QUESTIONS.filter(function (q) { return q.figure_kind; }).length;
-    var figureFlagged = flagCounts.figure || 0;
-
-    var skills = META.skills.map(function (entry) {
-      return '<tr><td>' + esc(entry.domain) + '</td><td>' + esc(entry.skill) + '</td>' +
-        '<td class="num">' + entry.count + '</td><td class="muted small">' +
-        esc(entry.sets.join(', ')) + '</td></tr>';
-    }).join('');
+  /* ------------------------------------------------------------ format */
+  function renderFormat() {
+    var example = JSON.stringify({
+      sets: [
+        {
+          id: 'example-set',
+          title: 'Example Set',
+          description: 'Optional one-line description.',
+          questions: [
+            {
+              id: 'q1',
+              passage: 'Optional context or passage.',
+              question: 'What is the capital of Australia?',
+              choices: ['Sydney', 'Canberra', 'Melbourne', 'Perth'],
+              answer: 1,
+              explanation: 'Canberra is the capital of Australia.',
+              explanations: [
+                'Sydney is the largest city, but it is not the capital.',
+                'Correct. Canberra is the capital.',
+                'Melbourne is a large city, but it is not the capital.',
+                'Perth is the capital of Western Australia, not of the country.'
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2);
 
     appEl.innerHTML =
-      '<div class="card"><h1>Where this data comes from</h1>' +
-      '<p>Every question here is one of the <b>' + META.count + ' ' +
-        esc(META.section) + ' items at the ' + esc(META.difficulty) +
-        ' difficulty tier</b> of the question bank export in ' +
-        '<code>' + esc(META.source) + '</code>.</p>' +
-      '<ul><li><b>Question text, choices:</b> OCR (tesseract) of the original ' +
-        'screenshot-per-row sheets, so the wording can carry OCR slips — each item keeps ' +
-        'its OCR warning flags below. The ' + figureItems + ' figure items are the ' +
-        'exception: their text and figure come from the bank (see <i>Figures</i>).</li>' +
-      '<li><b>Answer letter:</b> the official key PDFs for 224 of the items. The remaining ' +
-        '29 (the whole <i>Inferences 3</i> set, whose key PDF is byte-identical to the ' +
-        'question PDF) are recovered from the bank rationale, which always opens with ' +
-        '"Choice X is the best answer" — that recovery agrees with the key on all 224 ' +
-        'keyed items, so it is a checked derivation, not a guess.</li>' +
-      '<li><b>Difficulty and rationale:</b> the College Board Educator Question Bank API ' +
-        '(<code>qbank-api.collegeboard.org</code>), joined on the 8-hex question id. The ' +
-        'rationales are official.</li>' +
-      '<li><b>Figures:</b> the ' + figureItems + ' items whose bank record draws one carry ' +
-        'the bank\'s own figure markup — inline SVG for bar and line charts (axis labels ' +
-        'and series values as real text, plus a long description on the graphic) and real ' +
-        'table markup for tables — with the bank\'s exact prose as the stimulus. That ' +
-        'markup is sanitized to a tag and attribute allowlist before it is injected here. ' +
-        'Chart geometry does not survive OCR, so the ' + (figureFlagged - figureItems) +
-        ' flagged items without bank markup (ids the bank does not list, or a "figure" the ' +
-        'text only names, like a periodic table) keep the OCR text and its caveat.</li>' +
-      '<li><b>Underlining and italics</b> are not captured by OCR at all, which matters ' +
-        'for the items that ask about an underlined portion; the bank markup of the figure ' +
-        'items keeps both (<code>&lt;u&gt;</code>, <code>&lt;em&gt;</code>).</li></ul>' +
-      '<h4>Source-quality flags on these ' + META.count + ' items</h4>' +
-      '<p>' + flags + '</p>' +
-      '<p class="small muted">This file is generated on your machine and is not part of ' +
-        'the project repository: the question text and rationales it holds remain the ' +
-        'property of College Board. Not affiliated with or endorsed by College Board, ' +
-        'Khan Academy or any other test publisher.</p></div>' +
-      '<div class="card"><h3>How mastery and review work</h3>' +
-      '<p>Mastery is a 0–100 point total per skill, the same shape Khan Academy uses. A ' +
-        'question answered correctly for the first time is worth <b>+' +
-        C.MASTERY.firstCorrect + '</b>; the same question answered right again is worth ' +
-        '<b>+' + C.MASTERY.repeatCorrect + '</b>; a miss costs <b>' +
-        C.MASTERY.wrong + '</b>. Tiers: ' +
-        C.MASTERY.tiers.map(function (tier) {
-          return '<b>' + tier.label + '</b> ≥ ' + tier.min;
-        }).reverse().join(', ') + '.</p>' +
-      '<p>Review is a Leitner box system: each correct answer moves the question up a box, ' +
-        'while a miss sends it back to box 0 and makes it due immediately. Box gaps: ' +
-        C.SRS_INTERVALS_DAYS.slice(1).join(', ') + ' days. The ' +
-        '<b>Review due</b> button serves only the questions that are due.</p>' +
-      '<p><b>Practice</b> walks the skill least-seen-first; <b>Mixed drill</b> starts with ' +
-        'your weakest skill. Filters in Settings apply to all three.</p></div>' +
-      '<div class="card"><h3>Contents</h3><table><thead><tr><th>Domain</th><th>Skill</th>' +
-        '<th class="num">Hard items</th><th>Sets</th></tr></thead><tbody>' + skills +
-      '</tbody></table>' +
-      '<p class="small muted" style="margin-top:.8rem">Regenerate this data with ' +
-        '<code>python3 tools/build_app_data.py</code>; the extraction pipeline lives in ' +
-        '<code>questions/tools/</code>.</p></div>';
+      '<div class="card"><h1>Question JSON format</h1>' +
+      '<p>All sets live in <code>questions/sets.json</code>, which the app fetches at ' +
+      'startup. The file is one object with a <code>sets</code> array:</p>' +
+      '<pre class="code">' + esc(example) + '</pre>' +
+      '<h3>Set fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
+      '</tr></thead><tbody>' +
+      '<tr><td><code>id</code></td><td>required</td><td>Stable, unique set id. Progress ' +
+        'and archiving are keyed by it.</td></tr>' +
+      '<tr><td><code>title</code></td><td>required</td><td>Name shown on the set card.</td></tr>' +
+      '<tr><td><code>description</code></td><td>optional</td><td>Short line under the title.</td></tr>' +
+      '<tr><td><code>questions</code></td><td>required</td><td>Non-empty array of question ' +
+        'objects.</td></tr></tbody></table>' +
+      '<h3>Question fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
+      '</tr></thead><tbody>' +
+      '<tr><td><code>id</code></td><td>required</td><td>Unique within the set. Stable ids ' +
+        'keep progress attached when you edit the file.</td></tr>' +
+      '<tr><td><code>question</code></td><td>required</td><td>The question stem.</td></tr>' +
+      '<tr><td><code>choices</code></td><td>required</td><td>Two or more choice strings. ' +
+        'Labels A, B, C … are generated from their order.</td></tr>' +
+      '<tr><td><code>answer</code></td><td>required</td><td>0-based index of the correct ' +
+        'choice. The example answer <code>1</code> means the second choice.</td></tr>' +
+      '<tr><td><code>passage</code></td><td>optional</td><td>Context shown above the question. ' +
+        'Blank lines separate paragraphs; lines starting with • become a list.</td></tr>' +
+      '<tr><td><code>explanation</code></td><td>optional</td><td>Overall explanation shown ' +
+        'after answering.</td></tr>' +
+      '<tr><td><code>explanations</code></td><td>optional</td><td>One entry per choice ' +
+        '(string or <code>null</code>); each non-empty entry is shown under that choice.</td></tr>' +
+      '</tbody></table></div>' +
+      '<div class="card"><h3>Running it</h3>' +
+      '<p>Serve the repository root and open <code>/app/</code>:</p>' +
+      '<pre class="code">python3 -m http.server 8765' + '\n' +
+      'http://127.0.0.1:8765/app/</pre>' +
+      '<p>The app reads <code>questions/sets.json</code> with <code>fetch</code>, so opening ' +
+      '<code>index.html</code> directly from disk does not work in browsers that block ' +
+      '<code>file://</code> reads.</p>' +
+      '<p>Progress lives in this browser only. <b>Archive</b> moves a set off the active ' +
+      'list and keeps a copy of its questions and progress in local storage; <b>Restore</b> ' +
+      'brings it back, even if the source file no longer lists it.</p></div>';
   }
 
   /* ------------------------------------------------------------ keyboard */
   document.addEventListener('keydown', function (event) {
-    if (parseHash().path !== '/practice' || !session || session.index >= session.ids.length) return;
+    if (parseHash().path !== '/practice' || !session ||
+        session.index >= session.questions.length) return;
     var tag = (event.target.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
-    /* Enter/Space on a cross-out button toggles it; it must not check the answer. */
-    if (event.target.classList && event.target.classList.contains('elim')) return;
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'a') return;
+    var cls = event.target.classList || { contains: function () { return false; } };
 
     if (event.key === 'Enter' || event.key === ' ') {
+      /* A focused choice: Enter checks/advances; Space selects natively. */
+      if (cls.contains('choice')) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          action();
+        }
+        return;
+      }
+      /* The cross-out button and the action button handle their own activation. */
+      if (cls.contains('elim') || event.target.id === 'action' || tag === 'button') return;
       if (session.checked || session.selected != null) {
         event.preventDefault();
         action();
@@ -1038,16 +1129,24 @@
       return;
     }
     var key = event.key.toUpperCase();
-    var byLetter = VERDICT.indexOf(key);
-    var byNumber = '1234'.indexOf(key);
-    var index = byLetter >= 0 ? byLetter : byNumber;
-    if (index >= 0) {
+    var index = -1;
+    if (key.length === 1 && key >= 'A' && key <= 'Z') index = key.charCodeAt(0) - 65;
+    var number = '123456789'.indexOf(key);
+    if (number >= 0) index = number;
+    if (index >= 0 && index < session.questions[session.index].choices.length) {
       event.preventDefault();
       selectChoice(index);
     }
   });
 
-  window.addEventListener('hashchange', render);
-  applyTheme();
-  render();
+  /* ------------------------------------------------------------ boot */
+  async function init() {
+    applyTheme();
+    appEl.innerHTML = '<div class="card"><p class="muted">Loading question sets…</p></div>';
+    await loadBank();
+    window.addEventListener('hashchange', render);
+    render();
+  }
+
+  init();
 })();

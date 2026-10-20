@@ -1,14 +1,12 @@
 <!DOCTYPE html>
 <!-- SPDX-License-Identifier: MIT
-     Copyright (c) 2026 naromil
-     No College Board question content is distributed with this repository: the generated
-     data file app/data/questions.js is gitignored and local-only. See NOTICE.md. -->
+     Copyright (c) 2026 naromil -->
 <html lang="en" data-theme="auto">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SAT Hard Mode — Reading &amp; Writing trainer</title>
-<meta name="description" content="Drill the 253 hard Reading &amp; Writing questions from the SAT question bank, with rationales, mastery tracking and spaced review.">
+<title>Question Trainer</title>
+<meta name="description" content="A local-first, set-based multiple-choice question trainer with mastery tracking and spaced review.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -16,26 +14,27 @@
 <header class="topbar">
   <div class="topbar-inner">
     <a class="brand" href="#/">
-      <span class="brand-mark">SAT</span>
-      <span class="brand-text">Hard Mode<small>Reading &amp; Writing</small></span>
+      <span class="brand-mark">QT</span>
+      <span class="brand-text">Question Trainer<small>practice by set</small></span>
     </a>
     <nav class="nav" id="nav">
-      <a href="#/" data-route="/">Practice</a>
+      <a href="#/" data-route="/">Sets</a>
+      <a href="#/archive" data-route="/archive">Archive</a>
       <a href="#/stats" data-route="/stats">Progress</a>
       <a href="#/settings" data-route="/settings">Settings</a>
-      <a href="#/about" data-route="/about">Data</a>
+      <a href="#/format" data-route="/format">Format</a>
     </nav>
     <div class="pills" id="pills"></div>
   </div>
 </header>
-<main id="main" class="wrap" tabindex="-1"><div id="app"></div></main>
+<main id="main" class="wrap" tabindex="-1">
+  <div id="notice"></div>
+  <div id="app"></div>
+</main>
 <footer class="foot">
-  <p>Question text, choices and rationales come from the College Board Educator
-  Question Bank and OCR of the source sheets — see <a href="#/about">Data</a>.
-  Held locally, not part of this repository. Not affiliated with College Board.
-  Progress is stored in this browser only.</p>
+  <p>Questions come from <code>questions/sets.json</code>. Progress and archived sets
+  are stored in this browser only. <a href="#/format">JSON format</a>.</p>
 </footer>
-<script src="data/questions.js"></script>
 <script src="core.js"></script>
 <script src="app.js"></script>
 </body>

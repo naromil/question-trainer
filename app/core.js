@@ -1,31 +1,32 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (c) 2026 naromil
- * No College Board question content is distributed with this repository; see NOTICE.md.
  *
- * SAT trainer - pure logic.
+ * Question Trainer - pure logic.
  *
  * No DOM, no storage: everything here is a plain function over the state
  * object so it can be unit tested in node (tools/test_core.js) and reused by
  * app/app.js in the browser. Loaded as a classic script tag, so it publishes
- * `SATCore` on the global object (and `module.exports` under node).
+ * `QTCore` on the global object (and `module.exports` under node).
  */
 (function (root, factory) {
   var api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.SATCore = api;
+  else root.QTCore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
   var DAY_MS = 86400000;
   var STATE_VERSION = 1;
+  var STATE_APP = 'question-trainer';
+  var SESSION_LENGTHS = [4, 8, 12, 20];
 
   /* ------------------------------------------------------------------ *
    * Mastery
    *
-   * Per skill the trainer keeps a point total in [0, 100] - the same shape
-   * Khan Academy uses. A question answered correctly for the first time is
-   * worth the most; repeats are worth less (you already knew it); a miss
-   * costs points, so mastery decays if a skill goes rusty.
+   * Per set the trainer keeps a point total in [0, 100]. A question answered
+   * correctly for the first time is worth the most; repeats are worth less
+   * (you already knew it); a miss costs points, so mastery decays if a set
+   * goes rusty.
    * ------------------------------------------------------------------ */
   var MASTERY = {
     firstCorrect: 12,
@@ -47,20 +48,6 @@
   var SRS_INTERVALS_DAYS = [0, 1, 3, 7, 21];
   var SRS_LAST_BOX = SRS_INTERVALS_DAYS.length - 1;
 
-  /* OCR-quality flags that make a question untrustworthy enough to filter. */
-  var RISKY_FLAGS = [
-    'low-confidence',
-    'low-confidence-word',
-    'ocr-disagreement',
-    'line-repaired',
-    'choices-fallback',
-    'choices-block-fallback',
-    'blank-missing',
-    'multiple-blanks'
-  ];
-
-  var LETTERS = ['A', 'B', 'C', 'D'];
-
   function clamp(n, lo, hi) {
     return n < lo ? lo : n > hi ? hi : n;
   }
@@ -72,20 +59,179 @@
     return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
   }
 
+  /* Choice labels are derived from the index: 0 -> A, 25 -> Z, 26 -> AA. */
+  function letterFor(index) {
+    var n = (index | 0) + 1;
+    var out = '';
+    while (n > 0) {
+      var rem = (n - 1) % 26;
+      out = String.fromCharCode(65 + rem) + out;
+      n = Math.floor((n - 1) / 26);
+    }
+    return out;
+  }
+
+  /* Progress is keyed by set plus question id, so two sets may reuse a
+   * question id without sharing history. Encoding keeps the key unambiguous
+   * even when an id contains a slash or a colon. */
+  function questionKey(setId, questionId) {
+    return encodeURIComponent(String(setId)) + '/' + encodeURIComponent(String(questionId));
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Fixed JSON format
+   *
+   * questions/sets.json:
+   *   { "sets": [ { "id", "title", "description"?, "questions": [
+   *       { "id", "question", "choices": ["..."], "answer": <0-based index>,
+   *         "passage"?, "explanation"?, "explanations"?: ["..." | null] }
+   *   ] } ] }
+   *
+   * One bad set is reported and skipped; the rest of the file still loads.
+   * ------------------------------------------------------------------ */
+  function text(value) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  function normalizeQuestion(raw, index) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('question ' + (index + 1) + ' must be an object');
+    }
+    var id = text(raw.id);
+    if (!id) throw new Error('question ' + (index + 1) + ' needs a non-empty string "id"');
+
+    var prompt = text(raw.question);
+    if (!prompt) throw new Error('question "' + id + '" needs a non-empty "question"');
+
+    if (!Array.isArray(raw.choices) || raw.choices.length < 2) {
+      throw new Error('question "' + id + '" needs at least two "choices"');
+    }
+    var choices = raw.choices.map(function (choice, i) {
+      var label = text(choice);
+      if (!label) throw new Error('question "' + id + '" choice ' + (i + 1) + ' must be a non-empty string');
+      return label;
+    });
+
+    var answer = raw.answer;
+    if (typeof answer !== 'number' || !isFinite(answer) || Math.floor(answer) !== answer ||
+        answer < 0 || answer >= choices.length) {
+      throw new Error('question "' + id + '" needs "answer" as a 0-based choice index ' +
+        'between 0 and ' + (choices.length - 1));
+    }
+
+    var explanations = null;
+    if (raw.explanations != null) {
+      if (!Array.isArray(raw.explanations) || raw.explanations.length !== choices.length) {
+        throw new Error('question "' + id + '" "explanations" must be an array with one entry ' +
+          'per choice');
+      }
+      explanations = raw.explanations.map(function (value, i) {
+        if (value == null) return '';
+        if (typeof value !== 'string') {
+          throw new Error('question "' + id + '" explanation ' + (i + 1) +
+            ' must be a string or null');
+        }
+        return value.trim();
+      });
+    }
+
+    return {
+      id: id,
+      passage: text(raw.passage),
+      question: prompt,
+      choices: choices,
+      answer: answer,
+      explanation: text(raw.explanation),
+      explanations: explanations
+    };
+  }
+
+  function normalizeSet(raw, index) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('set ' + (index + 1) + ' must be an object');
+    }
+    var id = text(raw.id);
+    if (!id) throw new Error('set ' + (index + 1) + ' needs a non-empty string "id"');
+    var title = text(raw.title);
+    if (!title) throw new Error('set "' + id + '" needs a non-empty "title"');
+    if (!Array.isArray(raw.questions) || !raw.questions.length) {
+      throw new Error('set "' + id + '" needs a non-empty "questions" array');
+    }
+
+    var seen = {};
+    var questions = raw.questions.map(function (question, i) {
+      var normalized = normalizeQuestion(question, i);
+      if (seen[normalized.id]) {
+        throw new Error('set "' + id + '" has duplicate question id "' + normalized.id + '"');
+      }
+      seen[normalized.id] = true;
+      return normalized;
+    });
+
+    return {
+      id: id,
+      title: title,
+      description: text(raw.description),
+      questions: questions
+    };
+  }
+
+  function normalizeBank(raw) {
+    var result = { sets: [], errors: [] };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !Array.isArray(raw.sets)) {
+      result.errors.push({ message: 'The file must be an object with a "sets" array.' });
+      return result;
+    }
+    var seen = {};
+    raw.sets.forEach(function (rawSet, index) {
+      try {
+        var set = normalizeSet(rawSet, index);
+        if (seen[set.id]) throw new Error('duplicate set id "' + set.id + '"');
+        seen[set.id] = true;
+        result.sets.push(set);
+      } catch (err) {
+        result.errors.push({ index: index, message: 'Set ' + (index + 1) + ': ' + err.message });
+      }
+    });
+    return result;
+  }
+
+  function cloneSet(set) {
+    return {
+      id: set.id,
+      title: set.title,
+      description: set.description || '',
+      questions: set.questions.map(function (question) {
+        return {
+          id: question.id,
+          passage: question.passage,
+          question: question.question,
+          choices: question.choices.slice(),
+          answer: question.answer,
+          explanation: question.explanation,
+          explanations: question.explanations ? question.explanations.slice() : null
+        };
+      })
+    };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * State
+   * ------------------------------------------------------------------ */
   function emptyState(now) {
     now = now || Date.now();
     return {
+      app: STATE_APP,
       v: STATE_VERSION,
       created: now,
       updated: now,
       q: {},
-      skills: {},
+      sets: {},
+      local: {},
+      archived: {},
       days: {},
       settings: {
         length: 4,
-        excludeFigure: false,
-        excludeRisky: false,
-        excludeUnderline: false,
         theme: 'auto',
         sound: true
       },
@@ -93,20 +239,34 @@
     };
   }
 
+  function sanitizeArchived(entry, now) {
+    var set = normalizeSet(entry, 0);
+    return {
+      id: set.id,
+      title: set.title,
+      description: set.description,
+      questions: set.questions,
+      archivedAt: typeof entry.archivedAt === 'number' ? entry.archivedAt : now
+    };
+  }
+
   /* Accepts anything (old export, truncated JSON, hand-edited file) and
    * returns a state the rest of the app can rely on. */
   function sanitizeState(raw, now) {
+    now = now || Date.now();
     var state = emptyState(now);
-    if (!raw || typeof raw !== 'object') return state;
+    if (!raw || typeof raw !== 'object' || raw.app !== STATE_APP || raw.v !== STATE_VERSION) {
+      return state;
+    }
 
     if (raw.q && typeof raw.q === 'object') {
-      Object.keys(raw.q).forEach(function (id) {
-        var rec = raw.q[id];
+      Object.keys(raw.q).forEach(function (key) {
+        var rec = raw.q[key];
         if (!rec || typeof rec !== 'object') return;
         var attempts = Math.max(0, rec.a | 0);
         if (!attempts) return;
         var correct = clamp(rec.c | 0, 0, attempts);
-        state.q[id] = {
+        state.q[key] = {
           a: attempts,
           c: correct,
           /* Exports predating `f` lose the first answer as soon as a question
@@ -121,18 +281,41 @@
       });
     }
 
-    if (raw.skills && typeof raw.skills === 'object') {
-      Object.keys(raw.skills).forEach(function (skill) {
-        var rec = raw.skills[skill];
+    if (raw.sets && typeof raw.sets === 'object') {
+      Object.keys(raw.sets).forEach(function (setId) {
+        var rec = raw.sets[setId];
         if (!rec || typeof rec !== 'object') return;
-        state.skills[skill] = {
+        var attempts = Math.max(0, rec.a | 0);
+        state.sets[setId] = {
           points: clamp(Math.round(rec.points) || 0, 0, MASTERY.cap),
-          a: Math.max(0, rec.a | 0),
-          c: Math.max(0, rec.c | 0),
+          a: attempts,
+          c: clamp(rec.c | 0, 0, attempts),
           streak: Math.max(0, rec.streak | 0)
         };
       });
     }
+
+    if (raw.local && typeof raw.local === 'object') {
+      Object.keys(raw.local).forEach(function (key) {
+        try {
+          var set = normalizeSet(raw.local[key], 0);
+          state.local[set.id] = set;
+        } catch (err) { /* drop an unusable restored copy */ }
+      });
+    }
+
+    if (raw.archived && typeof raw.archived === 'object') {
+      Object.keys(raw.archived).forEach(function (key) {
+        try {
+          var archived = sanitizeArchived(raw.archived[key], now);
+          state.archived[archived.id] = archived;
+        } catch (err) { /* drop an unusable archive entry */ }
+      });
+    }
+    /* An archived set must never also be active. */
+    Object.keys(state.local).forEach(function (id) {
+      if (state.archived[id]) delete state.local[id];
+    });
 
     if (raw.days && typeof raw.days === 'object') {
       Object.keys(raw.days).forEach(function (key) {
@@ -146,10 +329,7 @@
 
     if (raw.settings && typeof raw.settings === 'object') {
       var length = raw.settings.length | 0;
-      state.settings.length = [4, 8, 12, 20].indexOf(length) >= 0 ? length : 4;
-      state.settings.excludeFigure = !!raw.settings.excludeFigure;
-      state.settings.excludeRisky = !!raw.settings.excludeRisky;
-      state.settings.excludeUnderline = !!raw.settings.excludeUnderline;
+      state.settings.length = SESSION_LENGTHS.indexOf(length) >= 0 ? length : 4;
       state.settings.theme = ['auto', 'light', 'dark'].indexOf(raw.settings.theme) >= 0
         ? raw.settings.theme
         : 'auto';
@@ -166,27 +346,28 @@
       };
     }
     if (typeof raw.created === 'number') state.created = raw.created;
+    if (typeof raw.updated === 'number') state.updated = raw.updated;
     return state;
   }
 
-  function recFor(state, id) {
-    return state.q[id] || null;
+  function recordFor(state, setId, questionId) {
+    return state.q[questionKey(setId, questionId)] || null;
   }
 
   /* ------------------------------------------------------------------ *
    * Grading
    * ------------------------------------------------------------------ */
-  function applyAnswer(state, question, choiceIndex, now) {
+  function applyAnswer(state, setId, question, choiceIndex, now) {
     now = now || Date.now();
-    var letter = LETTERS[choiceIndex];
-    var correct = letter === question.answer;
-    var before = state.q[question.id] || null;
+    var key = questionKey(setId, question.id);
+    var correct = choiceIndex === question.answer;
+    var chosen = letterFor(choiceIndex);
+    var expected = letterFor(question.answer);
+    var before = state.q[key] || null;
     var hadCorrectBefore = !!(before && before.c > 0);
 
     var boxBefore = before ? before.box : 0;
-    var boxAfter = correct
-      ? clamp(boxBefore + 1, 1, SRS_LAST_BOX)
-      : 0;
+    var boxAfter = correct ? clamp(boxBefore + 1, 1, SRS_LAST_BOX) : 0;
     var rec = {
       a: (before ? before.a : 0) + 1,
       c: (before ? before.c : 0) + (correct ? 1 : 0),
@@ -198,24 +379,24 @@
       due: now + SRS_INTERVALS_DAYS[boxAfter] * DAY_MS,
       last: now
     };
-    state.q[question.id] = rec;
+    state.q[key] = rec;
 
-    var skill = state.skills[question.skill] || { points: 0, a: 0, c: 0, streak: 0 };
-    var pointsBefore = skill.points;
+    var set = state.sets[setId] || { points: 0, a: 0, c: 0, streak: 0 };
+    var pointsBefore = set.points;
     var delta = correct
       ? (hadCorrectBefore ? MASTERY.repeatCorrect : MASTERY.firstCorrect)
       : MASTERY.wrong;
-    skill.points = clamp(skill.points + delta, 0, MASTERY.cap);
-    skill.a += 1;
-    skill.c += correct ? 1 : 0;
-    skill.streak = correct ? skill.streak + 1 : 0;
-    state.skills[question.skill] = skill;
+    set.points = clamp(set.points + delta, 0, MASTERY.cap);
+    set.a += 1;
+    set.c += correct ? 1 : 0;
+    set.streak = correct ? set.streak + 1 : 0;
+    state.sets[setId] = set;
 
-    var key = dayKey(now);
-    var day = state.days[key] || { a: 0, c: 0 };
+    var key2 = dayKey(now);
+    var day = state.days[key2] || { a: 0, c: 0 };
     day.a += 1;
     day.c += correct ? 1 : 0;
-    state.days[key] = day;
+    state.days[key2] = day;
 
     state.totals.a += 1;
     if (correct) state.totals.c += 1;
@@ -223,11 +404,11 @@
 
     return {
       correct: correct,
-      expected: question.answer,
-      chosen: letter,
+      expected: expected,
+      chosen: chosen,
       pointsBefore: pointsBefore,
-      pointsAfter: skill.points,
-      pointsDelta: skill.points - pointsBefore,
+      pointsAfter: set.points,
+      pointsDelta: set.points - pointsBefore,
       coin: correct ? (hadCorrectBefore ? 'repeat' : 'new') : 'miss',
       boxBefore: boxBefore,
       boxAfter: boxAfter,
@@ -243,161 +424,50 @@
     return MASTERY.tiers[MASTERY.tiers.length - 1];
   }
 
-  /* Which mastery tier a point total is heading towards, for progress bars. */
-  function nextTierOf(points) {
-    var tiers = MASTERY.tiers;
-    for (var i = tiers.length - 1; i >= 0; i--) {
-      if (points < tiers[i].min) return tiers[i];
-    }
-    return null;
-  }
-
-  /* ------------------------------------------------------------------ *
-   * Rationale parsing
-   *
-   * Bank rationales have a fixed shape:
-   *   "Choice D is the best answer. <why>\n\n
-   *    Choice A is incorrect. <why> Choice B is incorrect. <why> ..."
-   * so the per-choice explanations can be shown next to the choices. Anything
-   * that does not match is kept whole and flagged `parsed: false`.
-   * ------------------------------------------------------------------ */
-  var BEST_RE = /^Choice ([A-D]) is the best answer\b\.?\s*/;
-  var WRONG_RE = /Choice ([A-D]) is incorrect\b\.?\s*/g;
-
-  function parseRationale(text, answerLetter) {
-    var parsed = {
-      parsed: false,
-      best: answerLetter,
-      bestText: '',
-      wrong: {},
-      raw: text || ''
-    };
-    if (!text) return parsed;
-
-    var blocks = text.split(/\n{2,}/);
-    var head = blocks[0].replace(/^\s+/, '');
-    var match = BEST_RE.exec(head);
-    var rest = blocks.slice(1).join(' ');
-
-    if (match) {
-      parsed.best = match[1];
-      parsed.bestText = head.slice(match[0].length).trim();
-      WRONG_RE.lastIndex = 0;
-      var marks = [];
-      var m;
-      while ((m = WRONG_RE.exec(rest)) !== null) {
-        marks.push({ letter: m[1], start: m.index, end: WRONG_RE.lastIndex });
-      }
-      if (marks.length) {
-        marks.forEach(function (mark, i) {
-          var stop = i + 1 < marks.length ? marks[i + 1].start : rest.length;
-          parsed.wrong[mark.letter] = rest.slice(mark.end, stop).trim();
-        });
-      }
-      parsed.parsed = marks.length === 3 && !!parsed.bestText &&
-        parsed.best === answerLetter && !parsed.wrong[answerLetter];
-    }
-    return parsed;
-  }
-
-  /* The explanation for one choice, or '' when there is none. */
-  function rationaleFor(parsed, letter) {
-    if (!parsed.parsed) return '';
-    return letter === parsed.best ? parsed.bestText : (parsed.wrong[letter] || '');
-  }
-
-  /* ------------------------------------------------------------------ *
-   * Question pool
-   * ------------------------------------------------------------------ */
-  function flagsOf(question) {
-    return question.flags || [];
-  }
-
-  function isExcluded(question, filters) {
-    if (!filters) return false;
-    var flags = flagsOf(question);
-    if (filters.excludeFigure && flags.indexOf('figure') >= 0) return true;
-    if (filters.excludeUnderline && flags.indexOf('underline') >= 0) return true;
-    if (filters.excludeRisky) {
-      for (var i = 0; i < RISKY_FLAGS.length; i++) {
-        if (flags.indexOf(RISKY_FLAGS[i]) >= 0) return true;
-      }
-    }
-    return false;
-  }
-
-  function poolFor(questions, options) {
-    var skill = options.skill || null;
-    return questions.filter(function (q) {
-      if (skill && q.skill !== skill) return false;
-      return !isExcluded(q, options.filters);
-    });
-  }
-
-  function dueAt(state, id) {
-    var rec = state.q[id];
-    return rec ? rec.due : null;
-  }
-
-  function lastSeenAt(state, id) {
-    var rec = state.q[id];
-    return rec ? rec.last : 0;
-  }
-
-  function boxOf(state, id) {
-    var rec = state.q[id];
-    return rec ? rec.box : 0;
-  }
-
-  function attemptsOf(state, id) {
-    var rec = state.q[id];
-    return rec ? rec.a : 0;
-  }
-
-  function masteryOf(state, skill) {
-    var rec = state.skills[skill];
+  function masteryOf(state, setId) {
+    var rec = state.sets[setId];
     return rec ? rec.points : 0;
   }
 
-  /* Questions that are due for review right now: seen at least once and past
-   * their due date. Box 0 items are lapsed, so they are always due. */
-  function dueQuestions(state, questions, now) {
+  /* ------------------------------------------------------------------ *
+   * Session selection
+   * ------------------------------------------------------------------ */
+  function dueQuestions(state, setId, questions, now) {
     now = now || Date.now();
-    return questions.filter(function (q) {
-      var rec = state.q[q.id];
+    return questions.filter(function (question) {
+      var rec = recordFor(state, setId, question.id);
       return !!rec && rec.a > 0 && rec.due <= now;
     });
   }
 
   /* Decorate with a random tiebreak so equal-priority questions come in a
    * different order each session (deterministic when `rng` is provided). */
-  function decorate(list, state, rng) {
-    return list.map(function (q) {
-      return { q: q, r: rng() };
+  function decorate(list, state, setId, rng) {
+    return list.map(function (question) {
+      return { q: question, r: rng() };
     }).sort(function (x, y) {
-      var bx = boxOf(state, x.q.id) - boxOf(state, y.q.id);
+      var rx = recordFor(state, setId, x.q.id);
+      var ry = recordFor(state, setId, y.q.id);
+      var bx = (rx ? rx.box : 0) - (ry ? ry.box : 0);
       if (bx) return bx;
-      var ax = attemptsOf(state, x.q.id) - attemptsOf(state, y.q.id);
+      var ax = (rx ? rx.a : 0) - (ry ? ry.a : 0);
       if (ax) return ax;
-      var lx = lastSeenAt(state, x.q.id) - lastSeenAt(state, y.q.id);
+      var lx = (rx ? rx.last : 0) - (ry ? ry.last : 0);
       if (lx) return lx;
       return x.r - y.r;
     }).map(function (entry) { return entry.q; });
   }
 
   /**
-   * Pick the questions for one session.
+   * Pick the questions for one session inside one set.
    *
    * options:
-   *   skill    - skill name, or null/'' for a mixed session
-   *   mode     - 'practice' (breadth-first), 'review' (spaced repetition),
-   *              'weak' (mix, weakest skills first)
+   *   mode     - 'practice' (breadth-first) or 'review' (spaced repetition)
    *   length   - number of questions
-   *   filters  - {excludeFigure, excludeUnderline, excludeRisky}
    *   exclude  - array/Set of question ids to skip (e.g. already done today)
    *   rng      - optional () => [0,1), injectable for tests
    */
-  function selectSession(state, questions, options) {
+  function selectSession(state, setId, questions, options) {
     options = options || {};
     var now = typeof options.now === 'number' ? options.now : Date.now();
     var rng = options.rng || Math.random;
@@ -406,8 +476,8 @@
     var skip = {};
     (options.exclude || []).forEach(function (id) { skip[id] = true; });
 
-    var pool = poolFor(questions, options).filter(function (q) {
-      return !skip[q.id];
+    var pool = questions.filter(function (question) {
+      return !skip[question.id];
     });
     var limit = Math.min(length, pool.length);
     if (!limit) return [];
@@ -415,82 +485,56 @@
     if (mode === 'review') {
       /* Due-only: a review session never pads itself with questions the
        * schedule does not ask for, so it may be shorter than `length`. */
-      return dueQuestions(state, pool, now).sort(function (a, b) {
-        return dueAt(state, a.id) - dueAt(state, b.id);
+      return dueQuestions(state, setId, pool, now).sort(function (a, b) {
+        return recordFor(state, setId, a.id).due - recordFor(state, setId, b.id).due;
       }).slice(0, limit);
     }
 
-    if (mode === 'weak') {
-      var skills = skillOrder(questions);
-      return decorate(pool, state, rng).sort(function (a, b) {
-        var sa = skills.indexOf(a.skill) - skills.indexOf(b.skill);
-        return sa || 0;
-      }).slice(0, limit);
-    }
-
-    return decorate(pool, state, rng).slice(0, limit);
-  }
-
-  /* Skill names in the order the question list presents them (already
-   * domain-ordered in the generated data). */
-  function skillOrder(questions) {
-    var out = [];
-    questions.forEach(function (q) {
-      if (out.indexOf(q.skill) < 0) out.push(q.skill);
-    });
-    return out;
+    return decorate(pool, state, setId, rng).slice(0, limit);
   }
 
   /* ------------------------------------------------------------------ *
-   * Reporting
+   * Per-set activity and archive
    * ------------------------------------------------------------------ */
-  function skillStats(state, questions, now) {
+  function setStats(state, set, now) {
     now = now || Date.now();
-    var rows = {};
-    var order = [];
-    questions.forEach(function (q) {
-      if (!rows[q.skill]) {
-        rows[q.skill] = {
-          skill: q.skill,
-          domain: q.domain,
-          total: 0,
-          attempted: 0,
-          correct: 0,
-          correctFirstTry: 0,
-          boxed: 0,
-          due: 0,
-          points: masteryOf(state, q.skill),
-          streak: (state.skills[q.skill] || {}).streak || 0
-        };
-        order.push(q.skill);
-      }
-      var row = rows[q.skill];
-      row.total += 1;
-      var rec = state.q[q.id];
-      if (rec && rec.a > 0) {
-        row.attempted += 1;
-        row.correct += rec.c;
-        row.correctFirstTry += rec.f;
-        row.boxed += 1;
-        if (rec.due <= now) row.due += 1;
-      }
+    var row = {
+      set: set,
+      id: set.id,
+      title: set.title,
+      description: set.description,
+      total: set.questions.length,
+      attempted: 0,
+      correct: 0,
+      correctFirstTry: 0,
+      due: 0,
+      points: masteryOf(state, set.id),
+      streak: (state.sets[set.id] || {}).streak || 0
+    };
+    set.questions.forEach(function (question) {
+      var rec = recordFor(state, set.id, question.id);
+      if (!rec || rec.a <= 0) return;
+      row.attempted += 1;
+      row.correct += rec.c;
+      row.correctFirstTry += rec.f;
+      if (rec.due <= now) row.due += 1;
     });
-    return order.map(function (skill) {
-      var row = rows[skill];
-      row.accuracy = row.attempted
-        ? Math.round((row.correctFirstTry / row.attempted) * 100)
-        : 0;
-      row.tier = tierOf(row.points, row.attempted);
-      row.unseen = row.total - row.attempted;
-      return row;
-    });
+    row.accuracy = row.attempted
+      ? Math.round((row.correctFirstTry / row.attempted) * 100)
+      : 0;
+    row.tier = tierOf(row.points, row.attempted);
+    row.unseen = row.total - row.attempted;
+    row.archived = !!set.archivedAt;
+    return row;
   }
 
-  function overallStats(state, questions, now) {
+  function allSetStats(state, sets, now) {
+    return sets.map(function (set) { return setStats(state, set, now); });
+  }
+
+  function overallStats(state, sets, now) {
     now = now || Date.now();
-    var stats = skillStats(state, questions, now);
-    var answered = state.totals.a;
-    var rows = stats.filter(function (row) { return row.attempted > 0; });
+    var rows = allSetStats(state, sets, now);
     var attempted = 0;
     var firstTry = 0;
     rows.forEach(function (row) {
@@ -498,19 +542,19 @@
       firstTry += row.correctFirstTry;
     });
     return {
-      answered: answered,
+      answered: state.totals.a,
       correct: state.totals.c,
       /* Share of questions whose first answer was right — not the share of all
        * answers that were right, which retries drag down. */
       accuracy: attempted ? Math.round((firstTry / attempted) * 100) : 0,
       sessions: state.totals.sessions,
-      mastered: stats.filter(function (r) { return r.tier.key === 'mastered'; }).length,
-      proficient: stats.filter(function (r) { return r.tier.key === 'proficient'; }).length,
-      skillsStarted: rows.length,
-      skillCount: stats.length,
-      due: dueQuestions(state, questions, now).length,
-      bankSize: questions.length,
-      seen: Object.keys(state.q).length,
+      mastered: rows.filter(function (row) { return row.tier.key === 'mastered'; }).length,
+      proficient: rows.filter(function (row) { return row.tier.key === 'proficient'; }).length,
+      setsStarted: rows.filter(function (row) { return row.attempted > 0; }).length,
+      setCount: rows.length,
+      due: rows.reduce(function (n, row) { return n + row.due; }, 0),
+      bankSize: rows.reduce(function (n, row) { return n + row.total; }, 0),
+      seen: attempted,
       streak: streak(state, now)
     };
   }
@@ -540,15 +584,23 @@
     return count;
   }
 
-  /* Most-missed questions, for the stats screen. */
-  function troubleSpots(state, questions, limit) {
+  /* Most-missed questions, for the progress screen. */
+  function troubleSpots(state, sets, limit) {
     var rows = [];
-    questions.forEach(function (q) {
-      var rec = state.q[q.id];
-      if (!rec || rec.a < 2) return;
-      var wrong = rec.a - rec.c;
-      if (!wrong) return;
-      rows.push({ q: q, attempts: rec.a, correct: rec.c, wrong: wrong });
+    sets.forEach(function (set) {
+      set.questions.forEach(function (question) {
+        var rec = recordFor(state, set.id, question.id);
+        if (!rec || rec.a < 2) return;
+        var wrong = rec.a - rec.c;
+        if (!wrong) return;
+        rows.push({
+          set: set,
+          q: question,
+          attempts: rec.a,
+          correct: rec.c,
+          wrong: wrong
+        });
+      });
     });
     rows.sort(function (a, b) {
       return b.wrong - a.wrong || b.attempts - a.attempts;
@@ -556,34 +608,113 @@
     return rows.slice(0, limit || 10);
   }
 
+  function archiveSet(state, set, now) {
+    now = now || Date.now();
+    var snapshot = cloneSet(set);
+    snapshot.archivedAt = now;
+    state.archived[set.id] = snapshot;
+    delete state.local[set.id];
+    state.updated = now;
+    return snapshot;
+  }
+
+  /* Restore an archived set. If the source file no longer lists it, keep the
+   * archived copy as a browser-local set so restore is not a dead end. */
+  function restoreSet(state, setId, sourceSet, now) {
+    now = now || Date.now();
+    var snapshot = state.archived[setId];
+    if (!snapshot) return null;
+    delete state.archived[setId];
+    if (!sourceSet) state.local[setId] = cloneSet(snapshot);
+    state.updated = now;
+    return snapshot;
+  }
+
+  function activeSets(state, sourceSets) {
+    var out = [];
+    var seen = {};
+    (sourceSets || []).forEach(function (set) {
+      if (state.archived[set.id] || seen[set.id]) return;
+      seen[set.id] = true;
+      out.push(set);
+    });
+    Object.keys(state.local || {}).forEach(function (id) {
+      if (state.archived[id] || seen[id]) return;
+      seen[id] = true;
+      out.push(state.local[id]);
+    });
+    return out;
+  }
+
+  function archivedSets(state) {
+    return Object.keys(state.archived || {}).map(function (id) {
+      return state.archived[id];
+    }).sort(function (a, b) {
+      return (b.archivedAt || 0) - (a.archivedAt || 0);
+    });
+  }
+
+  function allSets(state, sourceSets) {
+    var out = activeSets(state, sourceSets);
+    var seen = {};
+    out.forEach(function (set) { seen[set.id] = true; });
+    archivedSets(state).forEach(function (set) {
+      if (seen[set.id]) return;
+      seen[set.id] = true;
+      out.push(set);
+    });
+    return out;
+  }
+
+  /* A set for a session: active source first, then a restored local copy,
+   * then the frozen archived copy. */
+  function findSet(state, sourceSets, setId) {
+    var sets = activeSets(state, sourceSets);
+    for (var i = 0; i < sets.length; i++) {
+      if (sets[i].id === setId) return sets[i];
+    }
+    return (state.archived || {})[setId] || null;
+  }
+
+  function dueCount(state, sets, now) {
+    return (sets || []).reduce(function (n, set) {
+      return n + dueQuestions(state, set.id, set.questions, now).length;
+    }, 0);
+  }
+
   return {
-    LETTERS: LETTERS,
     MASTERY: MASTERY,
     SRS_INTERVALS_DAYS: SRS_INTERVALS_DAYS,
     SRS_LAST_BOX: SRS_LAST_BOX,
-    RISKY_FLAGS: RISKY_FLAGS,
     STATE_VERSION: STATE_VERSION,
+    STATE_APP: STATE_APP,
+    SESSION_LENGTHS: SESSION_LENGTHS,
     DAY_MS: DAY_MS,
     dayKey: dayKey,
+    letterFor: letterFor,
+    questionKey: questionKey,
+    normalizeBank: normalizeBank,
+    normalizeSet: normalizeSet,
+    cloneSet: cloneSet,
     emptyState: emptyState,
     sanitizeState: sanitizeState,
     applyAnswer: applyAnswer,
     tierOf: tierOf,
-    nextTierOf: nextTierOf,
     masteryOf: masteryOf,
-    parseRationale: parseRationale,
-    rationaleFor: rationaleFor,
-    isExcluded: isExcluded,
     dueQuestions: dueQuestions,
     selectSession: selectSession,
-    skillStats: skillStats,
-    skillOrder: skillOrder,
+    setStats: setStats,
+    allSetStats: allSetStats,
     overallStats: overallStats,
     activity: activity,
     streak: streak,
     troubleSpots: troubleSpots,
-    dueCount: function (state, questions, now) {
-      return dueQuestions(state, questions, now).length;
-    }
+    archiveSet: archiveSet,
+    restoreSet: restoreSet,
+    activeSets: activeSets,
+    archivedSets: archivedSets,
+    allSets: allSets,
+    findSet: findSet,
+    dueCount: dueCount
   };
 });

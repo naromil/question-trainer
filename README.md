@@ -1,145 +1,116 @@
-# SAT Hard Mode
+# Question Trainer
 
-A Khan Academy–style trainer for the **253 Hard Reading & Writing questions** in
-`questions/all.json`. Practice a skill, get graded instantly, read the
-official College Board rationale for the choice you picked, and let spaced review
-bring back everything you miss until it sticks.
+A local-first, set-based multiple-choice trainer. Drop a fixed-format JSON file into
+`questions/`, open the app, and practice one question set at a time — with instant
+grading, per-choice explanations, mastery tracking, spaced review, and an archive for
+sets you have finished.
 
-No build step, no dependencies, no server required: it is three script tags and a
-stylesheet.
-
-No College Board content ships in this repository. The extracted bank under `questions/`
-and the generated `app/data/questions.js` it feeds are gitignored and local-only — see
-[NOTICE.md](NOTICE.md).
+No build step, no dependencies, no server-side code: a static page plus
+`questions/sets.json`.
 
 ## Run it
 
-```bash
-# straight from disk (works in Chromium; open in a new tab per session)
-xdg-open app/index.html
+The app fetches its question file, so serve the repository root over HTTP rather than
+opening the HTML from disk:
 
-# or over HTTP if you prefer a normal origin for localStorage
+```bash
 python3 -m http.server 8765
-# then http://127.0.0.1:8765/app/
+# then open http://127.0.0.1:8765/app/
 ```
 
-Progress lives in `localStorage`, so pick one origin and stay on it. Use
-**Settings → Export/Import JSON** to move progress between a `file://` and an
-`http://` origin, or between machines.
+Progress and archived sets live in `localStorage`, so pick one origin and stay on it.
+Use **Settings → Export/Import JSON** to move progress between machines or origins.
 
 ## What it does
 
 | Screen | What you get |
 |---|---|
-| **Practice** (home) | 10 skills grouped by domain, each with a mastery bar, tier, seen/attempted counts, first-try accuracy and due count. Buttons: **Practice** (that skill, least-seen first), **Review** (that skill's due questions), **Mixed drill** (weakest skills first). Top-level buttons: mixed practice, review due, weakest skills. |
-| **Session** | One question at a time with progress dots and a session timer that counts answering time only — it stops the moment the answer is graded and resumes on the next question (the pill shows ⏸ meanwhile), so reading the rationale never inflates it. Click a choice (or press <kbd>A</kbd>–<kbd>D</kbd>/<kbd>1</kbd>–<kbd>4</kbd>), <kbd>Enter</kbd> to check, <kbd>Enter</kbd> again for the next question. Every choice ends with a Bluebook-style **ABC** button that crosses the choice out (and un-crosses it again); a crossed-out choice is struck through and cannot be picked, and the cross-outs reset on the next question. Feedback shows the verdict, *why the right choice is right*, *why your choice is wrong*, a collapsible full explanation, the mastery change, and when the item returns. A correct answer pulses the card green and plays a two-note chime, a miss shakes it red and plays a low buzz — the sound has a Settings switch, and the animation follows `prefers-reduced-motion`. |
-| **Results** | Score, mastery deltas per skill, a question-by-question log, the full rationale for every miss, and **Retry the N missed questions**. |
-| **Progress** | Answers given, first-try accuracy, questions seen, skills mastered, day streak, due now, a 14-day activity chart, a per-skill table, and your repeat **trouble spots** with the whole question and explanation inline. |
-| **Settings** | Session length (4/8/12/20), theme (auto/light/dark), answer sounds on/off, question filters, export/import/reset progress. |
-| **Data** | Provenance of every field, plus the per-flag counts behind each caveat. |
+| **Sets** (home) | One card per active question set: mastery bar, tier, answered count, first-try accuracy and due count. Buttons: **Practice**, **Review**, **Archive**. There is no mixed practice. |
+| **Session** | One set only. One question at a time with progress dots and an answering-time clock that pauses while you read feedback. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Choices can be crossed out (and un-crossed) before answering. |
+| **Results** | Score, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions**. |
+| **Archive** | Sets you archived, with their progress and a saved copy of their questions. **Restore** puts a set back on the active list. If the set is no longer in `questions/sets.json`, the saved copy is kept as a browser-local set. |
+| **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count, a 14-day activity chart, a per-set table, and repeated trouble spots. |
+| **Settings** | Session length, theme, answer sounds, export/import/reset. |
+| **Format** | The complete `questions/sets.json` schema with an example. |
 
 ### Mastery
 
-A 0–100 point total per skill, the same shape Khan Academy uses.
+A 0–100 point total per set.
 
 * first-time correct **+12**, correct repeat **+5**, miss **−8** — floored at 0, capped at 100;
-* tiers: **Familiar** ≥ 1, **Proficient** ≥ 50, **Mastered** ≥ 85 (10 different
-  questions answered right the first time saturates a skill).
+* tiers: **Familiar** ≥ 1, **Proficient** ≥ 50, **Mastered** ≥ 85.
 
 ### Spaced review
 
-Leitner boxes. A correct answer promotes the question one box; a miss sends it back
-to box 0 and makes it due immediately. Gaps between reviews: **1, 3, 7, 21** days.
+Leitner boxes. A correct answer promotes a question one box; a miss sends it back to box 0
+and makes it due immediately. Gaps between reviews: **1, 3, 7, 21** days.
 
-* **Review** mode serves *only* questions that are due (so it can be shorter than
-  the session length, and it says so when nothing is due).
-* **Practice** mode walks the whole pool least-seen-first, so it keeps covering
-  ground you have not touched while interleaving what you already know.
-* Missed questions are due instantly, so **Retry the missed questions** and the next
-  **Review** are the same loop.
+* **Practice** walks the whole set least-seen-first.
+* **Review** serves only questions that are due (so it can be shorter than the session
+  length, and says so when nothing is due).
+* Archiving a set never deletes its progress.
 
-Filters in Settings (skip figure items, skip underlined-portion items, skip
-OCR-warned items) apply to every mode.
+## Question data
 
-## Data
+`questions/sets.json` is read at startup:
 
-The app reads `app/data/questions.js`, generated by
-`tools/build_app_data.py` from the gitignored `questions/all.json`
-produced by the extraction pipeline in `questions/tools/`
-(see that directory's README for the full provenance).
-
-That generated file carries College Board question text and rationales, so it is **not
-distributed with this repository**: it is listed in `.gitignore`, it is in no commit, and
-a clone runs without it — the app says how to generate it, and the two data-integrity
-tests skip. Keep it, and `questions/`, out of your commits and releases; see
-[NOTICE.md](NOTICE.md).
-
-```bash
-python3 tools/build_app_data.py     # rebuild app/data/questions.js
-node tools/test_core.js             # 22 tests: grading, SRS, selection, state import, data integrity
+```json
+{
+  "sets": [
+    {
+      "id": "example-set",
+      "title": "Example Set",
+      "description": "Optional one-line description.",
+      "questions": [
+        {
+          "id": "q1",
+          "passage": "Optional context or passage.",
+          "question": "What is the capital of Australia?",
+          "choices": ["Sydney", "Canberra", "Melbourne", "Perth"],
+          "answer": 1,
+          "explanation": "Canberra is the capital of Australia.",
+          "explanations": [
+            "Sydney is the largest city, but it is not the capital.",
+            "Correct. Canberra is the capital.",
+            "Melbourne is a large city, but it is not the capital.",
+            "Perth is the capital of Western Australia, not of the country."
+          ]
+        }
+      ]
+    }
+  ]
+}
 ```
 
-What the builder does beyond a filter:
-
-* keeps `difficulty == "Hard"`, which is also the set that carries bank rationales;
-* **recovers the 29 `answer: null` items** (the whole *Inferences 3* set, whose key
-  PDF is byte-identical to the question PDF) from the rationale, which always opens
-  with `Choice X is the best answer`. That rule reproduces the official key on all
-  224 keyed items, and the builder aborts on any disagreement — so the recovery is
-  derived *and* checked, not guessed;
-* strips the stray leading `-` on four set names, folds OCR `Text1`/`Text2` labels
-  to `Text 1`/`Text 2`, and derives the `figure` / `underline` caveat flags — for a
-  figure item only where they still describe what it renders (see the caveats below);
-* for the 21 items whose bank record draws a figure, ships the bank's own markup as
-  `stimulus_html` (inline SVG chart or real table) with the bank's exact prose as the
-  stimulus, instead of the OCR of that row — which for a chart is reading-order noise.
-  That markup comes from `questions/tools/bank.py figures` and is sanitized to a tag
-  and attribute allowlist before it is injected into the page.
-
-### Caveats the UI shows you
-
-* **OCR.** The stimulus and choices are OCR of the source screenshots, so the
-  wording can carry slips. Items with `low-confidence`, `ocr-disagreement`,
-  `line-repaired` or recovered choice blocks are marked in the question header and
-  can be filtered out.
-* **Figures.** Bar/line chart geometry and table structure do not survive OCR, so items
-  whose bank record draws one carry the bank's own figure: 21 of the 22 figure items in
-  this tier render an inline SVG chart or a real table, with the bank's exact prose as
-  the stimulus. The one left without (its "table" is the Round Table, so the OCR flag was
-  a false positive) keeps the OCR text and a caveat banner.
-* **Underlining and italics** are not captured by OCR — the 9 items that ask about an
-  underlined portion carry a caveat banner. The bank markup of a figure item keeps both
-  (`<u>`, `<em>`), so the 3 figure items that ask about an underlined portion show it
-  and no longer warn.
-* **Reading & Writing only.** The question bank holds no math section, so neither
-  does this trainer.
+* `answer` is the **0-based index** of the correct choice.
+* `id` values must be stable: progress is keyed by set id plus question id.
+* `passage`, `explanation` and `explanations` are optional. `explanations`, when present,
+  has one entry per choice (string or `null`).
+* A malformed set is reported in the UI and skipped; the rest of the file still loads.
+* The sample file in this repository demonstrates every field. The **Format** screen
+  documents the same schema in the app.
 
 ## Layout
 
 ```
-app/index.html          shell + script tags
-app/styles.css          light/dark theme, Khan-ish palette
-app/core.js             pure logic: mastery, Leitner review, session selection,
-                        rationale parsing, stats, state sanitising (UMD, so tests
-                        require it directly)
-app/app.js              routing, rendering, localStorage
-app/data/questions.js   generated locally, gitignored: 253 hard items + metadata
-                        (contains College Board text and figure markup — never
-                        committed)
-tools/build_app_data.py builder (source -> app/data/questions.js)
-tools/test_core.js      node --test suite for core.js and the generated data
-NOTICE.md               copyright, content and trademark terms
-LICENSE                 MIT licence for this repository's original code and docs
+app/index.html          shell
+app/styles.css          light/dark theme
+app/core.js             pure logic: JSON validation, grading, mastery, SRS,
+                        session selection, archive/restore, stats
+app/app.js               routing, rendering, localStorage
+questions/sets.json     fixed-format question sets
+tools/test_core.js      node --test suite for core.js and the sample data
+LICENSE                 MIT licence
 ```
 
-## Copyright and content
+## Tests
 
-Copyright © 2026 naromil.
+```bash
+node --test tools/test_core.js
+```
 
-The original code, styles, tooling and documentation in this repository are released
-under the [MIT Licence](LICENSE). That licence covers this repository's own work only:
-the question material the trainer reads is not distributed here at all — it stays on your
-machine and out of git. SAT, Bluebook and College Board are trademarks of College Board,
-and Khan Academy is a trademark of Khan Academy, Inc. This project is not affiliated with,
-endorsed by or sponsored by any of them. See [NOTICE.md](NOTICE.md) for the content and
-trademark terms.
+## Copyright
+
+Copyright © 2026 naromil. The original code, styles, tooling and documentation in this
+repository are released under the [MIT Licence](LICENSE). Question content you put in
+`questions/sets.json` is yours to manage.

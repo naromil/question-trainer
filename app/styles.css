@@ -1,7 +1,6 @@
-/* SPDX-License-Identifier: MIT - Copyright (c) 2026 naromil. See NOTICE.md.
-   SAT Hard Mode - styles.
-   Light theme is the default; [data-theme] on <html> switches to dark.
-   Colours follow Khan Academy's palette (blue accent, green/red verdicts). */
+/* SPDX-License-Identifier: MIT - Copyright (c) 2026 naromil.
+   Question Trainer - styles.
+   Light theme is the default; [data-theme] on <html> switches to dark. */
 
 :root {
   --blue: #1865f2;
@@ -167,6 +166,7 @@ kbd {
 .tag.mastered { background: var(--green-soft); color: var(--green); border-color: transparent; }
 .tag.warn { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
 .tag.due { background: var(--purple); color: #fff; border-color: transparent; }
+.tag.archived { background: var(--card-2); color: var(--ink-3); border-style: dashed; }
 
 .bar { height: 7px; background: var(--card-2); border-radius: 999px; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--blue); border-radius: 999px; transition: width .3s; }
@@ -184,15 +184,15 @@ kbd {
 /* ---------------------------------------------------------------- home */
 .hero { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
 .hero .card { flex: 1 1 340px; }
-.domain { margin-top: 1.6rem; }
-.domain > h3 {
+.set-list { margin-top: 1.6rem; }
+.set-list > h2 {
   color: var(--ink-3); font-size: .78rem; letter-spacing: .1em; text-transform: uppercase;
   margin-bottom: .55rem;
 }
-.skills { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .75rem; }
-.skill { display: flex; flex-direction: column; gap: .5rem; }
-.skill h4 { margin: 0; font-size: 1rem; text-transform: none; letter-spacing: 0; color: var(--ink); }
-.skill .meta { font-size: .8rem; color: var(--ink-3); }
+.sets { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .75rem; }
+.set-card { display: flex; flex-direction: column; gap: .5rem; }
+.set-card h3 { margin: 0; font-size: 1rem; line-height: 1.3; }
+.set-card .meta { font-size: .8rem; color: var(--ink-3); }
 
 /* ---------------------------------------------------------------- practice */
 /* Answering view is capped at ~78% of the 1000px shell (780px) so stems and
@@ -206,37 +206,10 @@ kbd {
 .dot.current { background: var(--blue); }
 
 .q-meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-bottom: .7rem; }
-.stimulus { font-size: 1.125rem; }
-.stimulus .text-label { font-weight: 650; margin-bottom: .2rem; }
+.stimulus { font-size: 1.05rem; }
 .stimulus ul { margin: 0 0 .85em; padding-left: 1.15rem; }
 .stimulus li { margin-bottom: .3em; }
-.blank {
-  display: inline-block; min-width: 4.2em; border-bottom: 1.5px solid currentColor;
-  vertical-align: baseline; height: 1em;
-}
-
-/* ------------------------------------------------------- bank figures */
-/* Charts arrive as inline SVG and tables as real markup, so both keep the bank's own
- * geometry, labels and values. The bank draws its charts in black (strokes, text) and
- * its tables in the page's text colour, so the figure sits on its own white card with
- * dark text whatever the theme; on a narrow screen the card scrolls, never squashes. */
-.stimulus.has-figure .figure-credit {
-  font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--ink-3); margin: 0 0 .4rem;
-}
-.stimulus.has-figure figure {
-  margin: 0 0 .9rem; padding: .75rem; background: #fff; color: #111;
-  border: 1px solid var(--line-2); border-radius: var(--radius-sm); overflow-x: auto;
-}
-.stimulus.has-figure figure svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
-.stimulus.has-figure figure caption { font-size: .9rem; font-weight: 650; padding-bottom: .5rem; }
-.stimulus.has-figure figure th {
-  text-transform: none; letter-spacing: 0; font-size: .8rem; color: #111;
-  border-bottom-color: #d8d8d8;
-}
-.stimulus.has-figure figure td { border-bottom-color: #ececec; }
-.stimulus.has-figure figure u { text-decoration-thickness: 1.5px; }
-.stem { font-size: 1.125rem; font-weight: 650; margin: .9rem 0 .8rem; }
+.stem { font-size: 1.1rem; font-weight: 650; margin: .9rem 0 .8rem; }
 
 .choices { display: flex; flex-direction: column; gap: .5rem; margin: 0 0 .9rem; padding: 0; list-style: none; }
 /* The row owns the border/background so the cross-out button can sit inside it. */
@@ -248,7 +221,7 @@ kbd {
 .choice-row.live:hover { border-color: var(--blue); background: var(--blue-soft); }
 .choice {
   display: flex; flex: 1; gap: .7rem; align-items: flex-start; min-width: 0;
-  text-align: left; font: inherit; font-size: 1.25rem; color: var(--ink);
+  text-align: left; font: inherit; font-size: 1.05rem; color: var(--ink);
   background: none; border: 0; border-radius: var(--radius-sm);
   padding: .7rem .3rem .7rem .8rem; cursor: pointer;
 }
@@ -267,14 +240,14 @@ kbd {
 .choice:disabled { cursor: default; }
 .choice-row.is-static .choice { cursor: default; }
 
-/* --------------------------------------------------- option eliminator (ABC) */
-/* Bluebook's "cross out the choices you ruled out": the button is undoable and
+/* --------------------------------------------------------- option eliminator */
+/* Cross out the choices you have ruled out: the button is undoable and
    the crossed-out option can no longer be picked. */
 .elim {
   flex: 0 0 auto; align-self: center; position: relative;
   width: 2.3rem; height: 2.3rem; margin: .45rem .5rem .45rem .2rem;
   display: grid; place-items: center; cursor: pointer;
-  font: inherit; font-size: .6rem; font-weight: 700; letter-spacing: .02em;
+  font: inherit; font-size: .9rem; font-weight: 700; letter-spacing: .02em;
   color: var(--ink-3); background: none;
   border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
 }
@@ -337,14 +310,23 @@ kbd {
   padding: .35rem .8rem .15rem 3.2rem;
 }
 .choice-why b { font-weight: 650; color: var(--ink); }
-.rationale p { margin: 0 0 .7em; }
-.rationale .choice-why { margin-bottom: .6rem; }
-.rationale .choice-why b { font-weight: 650; }
+.explanation p { margin: 0 0 .7em; }
+.explanation .choice-why { margin-bottom: .6rem; }
+.explanation .choice-why b { font-weight: 650; }
 details { margin-top: .3rem; }
 summary { cursor: pointer; color: var(--blue); font-size: .88rem; }
 .warnbox {
   background: var(--amber-soft); color: var(--amber); border-radius: var(--radius-sm);
   padding: .55rem .7rem; font-size: .82rem; margin-bottom: .7rem;
+}
+.warnbox ul { margin: .35rem 0 .4rem; padding-left: 1.1rem; }
+.warnbox li { margin-bottom: .2rem; }
+.warnbox p:last-child { margin-bottom: 0; }
+
+pre.code {
+  margin: 0 0 .9rem; padding: .8rem .9rem; overflow-x: auto;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: .78rem; line-height: 1.45; color: var(--ink-2);
 }
 
 .actions { display: flex; gap: .6rem; align-items: center; margin-top: 1rem; }

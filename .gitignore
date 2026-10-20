@@ -1,13 +1,5 @@
-# Extracted College Board question bank and its extraction pipeline: local only,
-# never distributed with this repository.
-questions/
-
-# Generated from questions/all.json by tools/build_app_data.py. Contains College
-# Board question text and rationales, so it must never be committed.
-app/data/questions.js
-
 # Local codebase index.
 .codebase-index/
 
-# Python bytecode from running the builder.
+# Python bytecode.
 __pycache__/
