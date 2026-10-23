@@ -9,3 +9,6 @@ __pycache__/
 
 # Progress saved to disk by serve.py.
 progress/
+
+questions/
+!questions/README.md
