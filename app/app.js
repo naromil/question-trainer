@@ -396,11 +396,14 @@
     var paused = !(session && session.runningSince);
     el.textContent = (paused ? '⏸ ' : '') + fmtTime(elapsedMs());
     el.classList.toggle('is-paused', paused);
-    el.title = paused ? 'Paused while you review this answer' : 'Time spent answering';
+    el.title = paused
+      ? (session && session.checked ? 'Paused while you review this answer'
+        : 'Paused while the tab is hidden')
+      : 'Time spent answering';
   }
 
   function resumeTimer() {
-    if (!session || session.runningSince) return;
+    if (!session || session.runningSince || document.hidden) return;
     session.runningSince = Date.now();
     stopTimer();
     paintTimer();
@@ -415,6 +418,19 @@
     stopTimer();
     paintTimer();
   }
+
+  /* Answering time stops while the tab is hidden. On return it resumes only
+   * while an unanswered question is open; reading feedback stays paused. */
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      pauseTimer();
+      return;
+    }
+    if (parseHash().path === '/practice' && session &&
+        session.index < session.questions.length && !session.checked) {
+      resumeTimer();
+    }
+  });
 
   /* ------------------------------------------------------------ routing */
   function parseHash() {
