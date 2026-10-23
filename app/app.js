@@ -350,6 +350,12 @@
   }
 
   /* ------------------------------------------------------------ chrome */
+  /* Archived sets keep their review dates, but only active sets drive the
+   * global due counters; the Archive page still shows each set's own due. */
+  function activeDue(now) {
+    return C.activeDueCount(state, SOURCE_SETS, now || Date.now());
+  }
+
   function renderPills() {
     var sets = C.allSets(state, SOURCE_SETS);
     if (!pillsEl) return;
@@ -358,6 +364,7 @@
       return;
     }
     var stats = C.overallStats(state, sets);
+    var due = activeDue();
     pillsEl.innerHTML =
       '<span class="pill" title="Questions answered at least once">' +
         stats.seen + '/' + stats.bankSize + ' seen</span>' +
@@ -365,8 +372,8 @@
         stats.accuracy + '% right</span>' +
       (stats.streak ? '<span class="pill" title="Consecutive days with practice">' +
         plural(stats.streak, 'day') + ' streak</span>' : '') +
-      (stats.due ? '<span class="pill" title="Due for spaced review">↻ ' +
-        stats.due + ' due</span>' : '');
+      (due ? '<span class="pill" title="Due for spaced review in active sets">↻ ' +
+        due + ' due</span>' : '');
   }
 
   function setActiveNav(path) {
@@ -577,6 +584,7 @@
     var archived = C.archivedSets(state);
     var all = C.allSets(state, SOURCE_SETS);
     var stats = C.overallStats(state, all);
+    var due = activeDue();
     var rows = active.map(function (set) { return C.setStats(state, set, Date.now()); });
     var unitCount = rows.reduce(function (n, row) { return n + row.units; }, 0);
 
@@ -592,7 +600,7 @@
           stats.bankSize + '</span></b><span>questions seen</span></div>' +
         '<div class="stat"><b>' + stats.accuracy + '%</b><span>first-try correct</span></div>' +
         '<div class="stat"><b>' + stats.mastered + '</b><span>sets mastered</span></div>' +
-        '<div class="stat"><b>' + stats.due + '</b><span>due for review</span></div>' +
+        '<div class="stat"><b>' + due + '</b><span>due for review</span></div>' +
       '</div></div></div>';
 
     if (rows.length) {
@@ -1236,6 +1244,27 @@
   }
 
   /* ------------------------------------------------------------ stats */
+  function resetSetProgress(setId) {
+    var set = C.findSet(state, SOURCE_SETS, setId);
+    var title = set ? set.title : setId;
+    if (!window.confirm('Reset progress for "' + title + '"? Per-question history, ' +
+        'mastery and review dates are forgotten. Daily activity and all-time totals ' +
+        'are kept.')) return;
+    C.resetSetProgress(state, setId, Date.now());
+    if (!saveState()) {
+      window.alert('The reset could not be saved because browser storage is full.');
+    }
+    render();
+  }
+
+  function bindStatsButtons() {
+    $$('[data-reset-set]', appEl).forEach(function (button) {
+      button.addEventListener('click', function () {
+        resetSetProgress(button.getAttribute('data-reset-set'));
+      });
+    });
+  }
+
   function renderStats() {
     var sets = C.allSets(state, SOURCE_SETS);
     var stats = C.overallStats(state, sets);
@@ -1243,6 +1272,7 @@
     var days = C.activity(state, 14);
     var peak = days.reduce(function (n, day) { return Math.max(n, day.a); }, 0);
     var trouble = C.troubleSpots(state, sets, 8);
+    var due = activeDue();
 
     var activity = '<div class="spark">' + days.map(function (day) {
       var h = peak ? Math.round((day.a / peak) * 100) : 0;
@@ -1265,8 +1295,11 @@
         '<td><span class="tag ' + row.tier.key + '">' + row.tier.label + '</span></td>' +
         '<td class="num">' + row.attempted + '/' + row.total + '</td>' +
         '<td class="num">' + (row.attempted ? row.accuracy + '%' : '—') + '</td>' +
-        '<td class="num">' + (row.due || '—') + '</td></tr>';
-    }).join('') : '<tr><td colspan="7" class="muted">No sets loaded.</td></tr>';
+        '<td class="num">' + (row.due || '—') + '</td>' +
+        '<td class="num"><button type="button" class="btn btn-ghost btn-sm" ' +
+          'data-reset-set="' + esc(row.id) + '" aria-label="Reset progress for ' +
+          esc(row.title) + '">Reset</button></td></tr>';
+    }).join('') : '<tr><td colspan="8" class="muted">No sets loaded.</td></tr>';
 
     var troubleHTML = trouble.length ? trouble.map(function (row) {
       var where = esc(row.set.title) +
@@ -1285,14 +1318,15 @@
           '</b><span>questions seen</span></div>' +
         '<div class="stat"><b>' + stats.mastered + '</b><span>sets mastered</span></div>' +
         '<div class="stat"><b>' + stats.streak + '</b><span>day streak</span></div>' +
-        '<div class="stat"><b>' + stats.due + '</b><span>due now</span></div>' +
+        '<div class="stat"><b>' + due + '</b><span>due now</span></div>' +
       '</div></div>' +
       '<div class="card"><h3>Last 14 days</h3>' + activity + '</div>' +
       '<div class="card"><h3>Sets</h3><table><thead><tr><th>Set</th><th></th>' +
         '<th class="num">Mastery</th><th>Tier</th><th class="num">Seen</th>' +
-        '<th class="num">First try</th><th class="num">Due</th></tr></thead><tbody>' +
-        table + '</tbody></table></div>' +
+        '<th class="num">First try</th><th class="num">Due</th><th></th>' +
+        '</tr></thead><tbody>' + table + '</tbody></table></div>' +
       '<div class="card"><h3>Trouble spots</h3>' + troubleHTML + '</div>';
+    bindStatsButtons();
   }
 
   /* ------------------------------------------------------------ settings */

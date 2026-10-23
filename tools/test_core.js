@@ -643,7 +643,7 @@ test('archiveSet: absorbs the unit archives of the same set', () => {
   C.archiveSet(state, set, NOW + 1);
   assert.deepEqual(state.archivedUnits, {});
   assert.deepEqual(C.archivedSets(state).map((entry) => entry.kind), ['set']);
-  assert.equal(C.archivedSets(state)[0].units.length, 2);
+  assert.deepEqual(C.archivedSets(state)[0].units.map((unit) => unit.id), ['u1', 'u2']);
 });
 
 test('archiveSet: keeps a previously archived unit when given the filtered set', () => {
@@ -819,6 +819,31 @@ test('setStats and overallStats agree with the recorded answers', () => {
   assert.equal(stats.setCount, 1);
 });
 
+test('resetSetProgress: forgets one set and keeps its neighbours', () => {
+  const [set] = load(rawSet({
+    id: 'set-1',
+    title: 'Set One',
+    questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+  }));
+  const other = Object.assign({}, set, { id: 'set-2', title: 'Set Two' });
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.questions[0], 1, NOW);
+  C.applyAnswer(state, set.id, set.questions[1], 0, NOW);
+  C.applyAnswer(state, other.id, other.questions[0], 1, NOW);
+  const totals = Object.assign({}, state.totals);
+
+  const removed = C.resetSetProgress(state, set.id, NOW + 1);
+
+  assert.equal(removed, 2);
+  assert.deepEqual(Object.keys(state.q), ['set-2/q1']);
+  assert.equal(state.sets[set.id], undefined);
+  assert.equal(state.sets[other.id].points, C.MASTERY.firstCorrect);
+  assert.deepEqual(state.totals, totals, 'cross-set totals keep their history');
+  assert.equal(state.updated, NOW + 1);
+  assert.equal(C.setStats(state, set, NOW + 2).attempted, 0);
+  assert.equal(C.setStats(state, other, NOW + 2).attempted, 1);
+});
+
 test('first-try accuracy counts the first answer, not eventual correctness', () => {
   const [set] = load(rawSet({
     questions: [question({ id: 'q1' }), question({ id: 'q2' })]
@@ -857,6 +882,22 @@ test('dueCount counts what the review mode would serve', () => {
   C.applyAnswer(state, set.id, set.questions[1], 0, NOW); // due now
   assert.equal(C.dueCount(state, [set], NOW), 1);
   assert.equal(C.dueCount(state, [set], NOW + 2 * DAY), 2);
+});
+
+test('activeDueCount: archived sets keep their schedules but leave the counter', () => {
+  const [set] = load(rawSet({
+    questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+  }));
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.questions[1], 0, NOW); // a miss is due now
+
+  assert.equal(C.activeDueCount(state, [set], NOW), 1);
+  assert.equal(C.dueCount(state, [set], NOW), 1);
+
+  C.archiveSet(state, set, NOW + 1);
+  assert.equal(C.dueCount(state, [set], NOW + 2), 1, 'the archived set is still due');
+  assert.equal(C.activeDueCount(state, [set], NOW + 2), 0,
+    'but it no longer contributes to the due counter');
 });
 
 test('activity reports the requested window, ending today', () => {

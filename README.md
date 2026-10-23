@@ -54,10 +54,10 @@ origins.
 | Screen | What you get |
 |---|---|
 | **Sets** (home) | One long card per active question set: mastery bar, tier, answered count, first-try accuracy, due count, and **Practice**, **Review**, **Archive** for the set. A set with several units also lists them on the right of its card, each unit with its own **Practice**, **Review** and **Archive**. There is no mixed practice. |
-| **Session** | One set, or one unit of it. One question at a time with progress dots and an answering-time clock that pauses while you read feedback. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Choices can be crossed out (and un-crossed) before answering. |
+| **Session** | One set, or one unit of it. One question at a time with progress dots and an answering-time clock that pauses while you read feedback and while the tab is hidden. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Choices can be crossed out (and un-crossed) before answering. |
 | **Results** | Score, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions** (inside the same unit when the session was unit-scoped). |
 | **Archive** | Sets and single units you archived, with their progress and a saved copy of their questions. **Restore** puts a set or unit back on the active list. If the source is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
-| **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count, a 14-day activity chart, a per-set table, and repeated trouble spots. |
+| **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count for active sets, a 14-day activity chart, a per-set table with a **Reset** action, and repeated trouble spots. |
 | **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. |
 | **Format** | The in-app schema summary with an example; the full reference is [questions/README.md](questions/README.md). |
 
@@ -76,7 +76,11 @@ and makes it due immediately. Gaps between reviews: **1, 3, 7, 21** days.
 * **Practice** walks the whole set least-seen-first.
 * **Review** serves only questions that are due (so it can be shorter than the session
   length, and says so when nothing is due).
+* Due counters count active sets only. Archived sets keep their review dates and show
+  them in the Archive, but do not add to the due totals until restored.
 * Archiving a set never deletes its progress.
+* **Reset** on the Progress screen forgets one set's per-question history, mastery and
+  review dates; the 14-day activity chart and all-time totals keep their history.
 
 ## Question data
 

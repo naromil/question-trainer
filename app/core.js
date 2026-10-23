@@ -749,6 +749,23 @@
     return decorate(pool, state, setId, rng).slice(0, limit);
   }
 
+  /* Forget one set's question history and mastery. Daily activity and the
+   * all-time totals are cross-set aggregates, so they keep their history; the
+   * set's own rows and due count are recalculated from the empty records. */
+  function resetSetProgress(state, setId, now) {
+    now = now || Date.now();
+    var prefix = scopedKey(setId, '');
+    var removed = 0;
+    Object.keys(state.q || {}).forEach(function (key) {
+      if (key.indexOf(prefix) !== 0) return;
+      delete state.q[key];
+      removed += 1;
+    });
+    delete state.sets[setId];
+    state.updated = now;
+    return removed;
+  }
+
   /* ------------------------------------------------------------------ *
    * Per-set activity and archive
    * ------------------------------------------------------------------ */
@@ -903,9 +920,9 @@
 
   /* Archiving a whole set freezes every unit. Unit-level archive entries for
    * that set are absorbed into the snapshot, so restoring the set brings all
-   * its units back at once. The caller may pass the active (filtered) set, as
-   * the home screen does after a unit was archived; those archived units are
-   * merged back so the set snapshot stays complete. */
+   * its units back at once. A caller may pass a filtered set (the active view
+   * after a unit was archived); missing archived units are merged back so the
+   * set snapshot stays complete. */
   function archiveSet(state, set, now) {
     now = now || Date.now();
     var units = [];
@@ -1037,8 +1054,8 @@
     Object.keys(state.archived || {}).forEach(function (id) {
       out.push(state.archived[id]);
     });
-    Object.keys(state.archivedUnits || {}).forEach(function (id) {
-      out.push(state.archivedUnits[id]);
+    Object.keys(state.archivedUnits || {}).forEach(function (key) {
+      out.push(state.archivedUnits[key]);
     });
     return out.sort(function (a, b) {
       return (b.archivedAt || 0) - (a.archivedAt || 0);
@@ -1076,6 +1093,12 @@
     }, 0);
   }
 
+  /* What the global due counters show: archived sets keep their schedules, but
+   * they are not actionable until restored. */
+  function activeDueCount(state, sourceSets, now) {
+    return dueCount(state, activeSets(state, sourceSets), now);
+  }
+
   return {
     MASTERY: MASTERY,
     SRS_INTERVALS_DAYS: SRS_INTERVALS_DAYS,
@@ -1105,6 +1128,7 @@
     masteryOf: masteryOf,
     dueQuestions: dueQuestions,
     selectSession: selectSession,
+    resetSetProgress: resetSetProgress,
     setStats: setStats,
     unitStats: unitStats,
     allSetStats: allSetStats,
@@ -1120,6 +1144,7 @@
     archivedSets: archivedSets,
     allSets: allSets,
     findSet: findSet,
-    dueCount: dueCount
+    dueCount: dueCount,
+    activeDueCount: activeDueCount
   };
 });
