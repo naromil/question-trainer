@@ -595,10 +595,29 @@ test('archiveUnit: hides one unit and keeps the rest of the set', () => {
   assert.equal(C.archivedSets(state)[0].kind, 'unit');
   assert.equal(C.archivedSets(state)[0].setTitle, 'Set One');
 
-  C.restoreUnit(state, 'u1', set, NOW + 1);
+  C.restoreUnit(state, set.id, 'u1', set, NOW + 1);
   assert.deepEqual(C.archivedSets(state), []);
   assert.deepEqual(C.activeSets(state, [set])[0].units.map((unit) => unit.id), ['u1', 'u2']);
   assert.deepEqual(state.local, {}, 'the source still has the unit, so no local copy is needed');
+});
+
+test('archiveUnit: the same unit id in another set is untouched', () => {
+  const setA = loadSet(
+    rawSet({ id: 'u1', title: 'Unit One', questions: [question({ id: 'q1' })] })
+  );
+  const setB = Object.assign({}, setA, { id: 'set-2', title: 'Set Two' });
+
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, setB, setB.units[0], NOW);
+
+  assert.deepEqual(C.activeSets(state, [setA, setB]).map((set) => set.id), ['set-1'],
+    'the colliding unit id in set A must not hide set A');
+  assert.deepEqual(C.archivedSets(state).map((entry) => entry.id), ['u1']);
+  assert.equal(C.archivedSets(state)[0].setId, 'set-2');
+
+  C.restoreUnit(state, 'set-2', 'u1', setB, NOW + 1);
+  assert.deepEqual(C.activeSets(state, [setA, setB]).map((set) => set.id),
+    ['set-1', 'set-2']);
 });
 
 test('archiveUnit: the set leaves the list when every unit is archived', () => {
@@ -627,6 +646,24 @@ test('archiveSet: absorbs the unit archives of the same set', () => {
   assert.equal(C.archivedSets(state)[0].units.length, 2);
 });
 
+test('archiveSet: keeps a previously archived unit when given the filtered set', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', title: 'Unit One', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, set, set.units[0], NOW);
+
+  /* The home screen passes the active set, which no longer contains u1. */
+  const filtered = C.activeSets(state, [set])[0];
+  const snapshot = C.archiveSet(state, filtered, NOW + 1);
+
+  assert.deepEqual(snapshot.units.map((unit) => unit.id), ['u2', 'u1']);
+  assert.deepEqual(state.archivedUnits, {});
+  C.restoreSet(state, set.id, null, NOW + 2);
+  assert.deepEqual(state.local[set.id].units.map((unit) => unit.id).sort(), ['u1', 'u2']);
+});
+
 test('restoreUnit: keeps a browser-local copy when the source lost the unit', () => {
   const set = loadSet(
     rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
@@ -636,7 +673,7 @@ test('restoreUnit: keeps a browser-local copy when the source lost the unit', ()
   C.archiveUnit(state, set, set.units[1], NOW);
 
   const shrunk = loadSet(rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }));  // same set id, unit file removed
-  C.restoreUnit(state, 'u2', shrunk, NOW + 1);
+  C.restoreUnit(state, 'set-1', 'u2', shrunk, NOW + 1);
 
   assert.deepEqual(C.archivedSets(state), []);
   assert.equal(state.local['set-1'].units.length, 2);
@@ -728,8 +765,10 @@ test('sanitizeState: keeps unit archives but drops those of an archived set', ()
   const kept = C.sanitizeState(Object.assign({}, base, {
     archivedUnits: { u1: Object.assign({ setId: 's', setTitle: 'S', archivedAt: 9 }, unit) }
   }), NOW);
-  assert.equal(kept.archivedUnits.u1.title, 'U1');
-  assert.equal(kept.archivedUnits.u1.kind, 'unit');
+  assert.deepEqual(Object.keys(kept.archivedUnits), ['s/u1'],
+    'the legacy bare-id key is migrated to a set-scoped key');
+  assert.equal(kept.archivedUnits['s/u1'].title, 'U1');
+  assert.equal(kept.archivedUnits['s/u1'].kind, 'unit');
 
   const absorbed = C.sanitizeState(Object.assign({}, base, {
     archived: { s: { id: 's', title: 'S', units: [unit], archivedAt: 5 } },

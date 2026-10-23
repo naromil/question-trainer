@@ -100,11 +100,19 @@
     return out;
   }
 
-  /* Progress is keyed by set plus question id, so two sets may reuse a
-   * question id without sharing history. Encoding keeps the key unambiguous
-   * even when an id contains a slash or a colon. */
+  /* Set-scoped ids are pairs: question ids are unique inside a set, and unit
+   * ids only inside their own set. Encoding keeps the key unambiguous even
+   * when an id contains a slash or a colon. */
+  function scopedKey(setId, itemId) {
+    return encodeURIComponent(String(setId)) + '/' + encodeURIComponent(String(itemId));
+  }
+
   function questionKey(setId, questionId) {
-    return encodeURIComponent(String(setId)) + '/' + encodeURIComponent(String(questionId));
+    return scopedKey(setId, questionId);
+  }
+
+  function unitKey(setId, unitId) {
+    return scopedKey(setId, unitId);
   }
 
   /* ------------------------------------------------------------------ *
@@ -464,13 +472,17 @@
 
   function sanitizeArchivedUnit(entry, now) {
     var unit = normalizeUnit(entry, 0);
+    var setId = text(entry.setId);
+    /* A unit archive is only meaningful inside its set: the id alone does not
+     * identify it, because two sets may both have a unit "basics". */
+    if (!setId) throw new Error('archived unit without a set id');
     return {
       id: unit.id,
       title: unit.title,
       description: unit.description,
       questions: unit.questions,
       kind: 'unit',
-      setId: text(entry.setId),
+      setId: setId,
       setTitle: text(entry.setTitle),
       archivedAt: typeof entry.archivedAt === 'number' ? entry.archivedAt : now
     };
@@ -543,7 +555,9 @@
       Object.keys(raw.archivedUnits).forEach(function (key) {
         try {
           var unit = sanitizeArchivedUnit(raw.archivedUnits[key], now);
-          state.archivedUnits[unit.id] = unit;
+          /* Derive the key from the entry, not the old object key: exports made
+           * before unit archives were set-scoped used the bare unit id. */
+          state.archivedUnits[unitKey(unit.setId, unit.id)] = unit;
         } catch (err) { /* drop an unusable archived unit */ }
       });
     }
@@ -553,8 +567,8 @@
     Object.keys(state.local).forEach(function (id) {
       if (state.archived[id]) delete state.local[id];
     });
-    Object.keys(state.archivedUnits).forEach(function (id) {
-      if (state.archived[state.archivedUnits[id].setId]) delete state.archivedUnits[id];
+    Object.keys(state.archivedUnits).forEach(function (key) {
+      if (state.archived[state.archivedUnits[key].setId]) delete state.archivedUnits[key];
     });
 
     if (raw.days && typeof raw.days === 'object') {
@@ -889,16 +903,33 @@
 
   /* Archiving a whole set freezes every unit. Unit-level archive entries for
    * that set are absorbed into the snapshot, so restoring the set brings all
-   * its units back at once. */
+   * its units back at once. The caller may pass the active (filtered) set, as
+   * the home screen does after a unit was archived; those archived units are
+   * merged back so the set snapshot stays complete. */
   function archiveSet(state, set, now) {
     now = now || Date.now();
-    var snapshot = withUnits(set, unitsOf(set).map(cloneUnit));
+    var units = [];
+    var seen = {};
+    unitsOf(set).forEach(function (unit) {
+      var key = unitKey(set.id, unit.id);
+      var source = state.archivedUnits[key] || unit;
+      if (seen[unit.id]) return;
+      seen[unit.id] = true;
+      units.push(cloneUnit(source));
+    });
+    Object.keys(state.archivedUnits || {}).forEach(function (key) {
+      var unit = state.archivedUnits[key];
+      if (!unit || unit.setId !== set.id || seen[unit.id]) return;
+      seen[unit.id] = true;
+      units.push(cloneUnit(unit));
+    });
+    var snapshot = withUnits(set, units);
     snapshot.archivedAt = now;
     snapshot.kind = 'set';
     state.archived[set.id] = snapshot;
     delete state.local[set.id];
-    Object.keys(state.archivedUnits || {}).forEach(function (unitId) {
-      if (state.archivedUnits[unitId].setId === set.id) delete state.archivedUnits[unitId];
+    Object.keys(state.archivedUnits || {}).forEach(function (key) {
+      if (state.archivedUnits[key].setId === set.id) delete state.archivedUnits[key];
     });
     state.updated = now;
     return snapshot;
@@ -918,7 +949,7 @@
       setTitle: set.title,
       archivedAt: now
     };
-    state.archivedUnits[unit.id] = snapshot;
+    state.archivedUnits[unitKey(set.id, unit.id)] = snapshot;
     state.updated = now;
     return snapshot;
   }
@@ -938,16 +969,18 @@
   /* Restore one archived unit. When the source set no longer has it (the folder
    * lost the unit file, or the folder itself is gone), the unit is kept in a
    * browser-local copy of the set, so the restore is never a dead end. */
-  function restoreUnit(state, unitId, sourceSet, now) {
+  function restoreUnit(state, setId, unitId, sourceSet, now) {
     now = now || Date.now();
-    var snapshot = state.archivedUnits[unitId];
+    var key = unitKey(setId, unitId);
+    var snapshot = state.archivedUnits[key];
     if (!snapshot) return null;
-    delete state.archivedUnits[unitId];
-    var present = unitsOf(sourceSet).some(function (unit) { return unit.id === unitId; });
+    delete state.archivedUnits[key];
+    var present = !!sourceSet && sourceSet.id === setId &&
+      unitsOf(sourceSet).some(function (unit) { return unit.id === unitId; });
     if (!present) {
       var host = state.local[snapshot.setId];
       if (!host) {
-        host = sourceSet ? cloneSet(sourceSet) : {
+        host = sourceSet && sourceSet.id === snapshot.setId ? cloneSet(sourceSet) : {
           id: snapshot.setId,
           title: snapshot.setTitle || snapshot.setId,
           description: '',
@@ -988,7 +1021,9 @@
       var set = byId[id];
       if (!set || state.archived[id]) return;
       var units = unitsOf(set);
-      var kept = units.filter(function (unit) { return !state.archivedUnits[unit.id]; });
+      var kept = units.filter(function (unit) {
+        return !state.archivedUnits[unitKey(set.id, unit.id)];
+      });
       if (!kept.length) return;
       out.push(kept.length === units.length ? set : withUnits(set, kept));
     });

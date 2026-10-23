@@ -624,7 +624,7 @@
   }
 
   function restoreUnit(setId, unitId) {
-    C.restoreUnit(state, unitId, sourceSet(setId), Date.now());
+    C.restoreUnit(state, setId, unitId, sourceSet(setId), Date.now());
     saveState();
     render();
   }
