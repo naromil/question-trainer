@@ -22,6 +22,9 @@
   --card: #ffffff;
   --card-2: #f2f4f7;
   --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 4px 14px rgba(16, 24, 40, .06);
+  --aura-right: rgba(0, 137, 63, .16);
+  --aura-wrong: rgba(217, 41, 22, .14);
+  --aura-streak: rgba(183, 109, 0, .18);
   --radius: 14px;
   --radius-sm: 9px;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -47,6 +50,9 @@ html[data-theme="dark"] {
   --card: #1b1f26;
   --card-2: #22272f;
   --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 18px rgba(0, 0, 0, .3);
+  --aura-right: rgba(74, 208, 125, .13);
+  --aura-wrong: rgba(255, 122, 107, .12);
+  --aura-streak: rgba(240, 179, 74, .15);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -60,6 +66,9 @@ html[data-theme="dark"] {
     --line: #2b3038; --line-2: #3a4049;
     --bg: #14171c; --card: #1b1f26; --card-2: #22272f;
     --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+    --aura-right: rgba(74,208,125,.13);
+    --aura-wrong: rgba(255,122,107,.12);
+    --aura-streak: rgba(240,179,74,.15);
   }
 }
 
@@ -240,20 +249,49 @@ kbd {
 /* ---------------------------------------------------------------- practice */
 /* Answering view is capped at ~78% of the 1000px shell (780px) so stems and
    choices read at a comfortable line length; other routes stay full width. */
-.practice-view { max-width: 780px; margin: 0 auto; }
-.prac-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.practice-view { max-width: 780px; margin: 0 auto; position: relative; }
+/* A quiet halo behind the question. Its colour follows the last verdict, so
+   the stage turns green, red or amber before the feedback copy is read. */
+.practice-view::before {
+  content: ""; position: absolute; inset: -34px 0 auto; height: 320px; z-index: 0;
+  background: radial-gradient(72% 78% at 50% 0%, var(--aura, transparent), transparent 72%);
+  pointer-events: none; transition: background-color .5s ease;
+}
+.practice-view > * { position: relative; z-index: 1; }
+.practice-view[data-mood="right"] { --aura: var(--aura-right); }
+.practice-view[data-mood="wrong"] { --aura: var(--aura-wrong); }
+.practice-view[data-mood="streak"] { --aura: var(--aura-streak); }
+#qcard { transition: box-shadow .5s ease; }
+.practice-view[data-mood] #qcard { box-shadow: var(--shadow), 0 18px 60px -30px var(--aura); }
+
+.prac-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .55rem; }
 /* A set plus a unit title can be long: keep it on one line and let it truncate
-   so the dots and the timer stay on the same row. */
+   so the status chips stay on the same row. */
 .prac-head .head-title {
   min-width: 0; flex: 1 1 auto; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.prac-head .dots { flex: 1 1 120px; }
-.dots { display: flex; gap: 5px; flex: 1; min-width: 120px; }
-.dot { width: 100%; height: 6px; border-radius: 999px; background: var(--line); }
+.prac-tools { display: flex; gap: .4rem; align-items: center; margin-left: auto; }
+.prac-tools .pill { display: inline-flex; align-items: center; gap: .28rem; font-variant-numeric: tabular-nums; }
+.mastery-pill b { color: var(--ink); font-weight: 650; }
+.mastery-pill.is-up { animation: chip-up .55s ease-out; }
+.mastery-pill.is-down { animation: chip-down .55s ease-out; }
+.streak-chip { color: var(--amber); border-color: transparent; background: var(--amber-soft); font-weight: 650; }
+.streak-chip[hidden] { display: none; }
+.streak-chip.pop { animation: fx-chip .3s ease-out; }
+.streak-chip.hot { background: var(--amber); color: var(--card); }
+
+.dots { display: flex; gap: 5px; margin: 0 0 .75rem; }
+.dot {
+  flex: 1; height: 7px; border-radius: 999px; background: var(--line);
+  transition: background .35s, box-shadow .35s;
+}
 .dot.correct { background: var(--green); }
 .dot.wrong { background: var(--red); }
-.dot.current { background: var(--blue); }
+.dot.current {
+  background: linear-gradient(90deg, var(--blue), var(--purple));
+  animation: dot-pulse 1.8s ease-in-out infinite;
+}
 
 .q-meta { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-bottom: .7rem; }
 .stimulus { font-size: 1.05rem; }
@@ -276,11 +314,16 @@ kbd {
 .choices { display: flex; flex-direction: column; gap: .5rem; margin: 0 0 .9rem; padding: 0; list-style: none; }
 /* The row owns the border/background so the cross-out button can sit inside it. */
 .choice-row {
-  display: flex; align-items: stretch;
+  display: flex; align-items: stretch; position: relative;
   background: var(--card); border: 1.5px solid var(--line-2); border-radius: var(--radius-sm);
-  transition: background .18s, border-color .18s;
+  transition: background .18s, border-color .18s, transform .16s, box-shadow .18s;
 }
-.choice-row.live:hover { border-color: var(--blue); background: var(--blue-soft); }
+.choice-row.live:hover {
+  border-color: var(--blue); background: var(--blue-soft);
+  transform: translateX(3px); box-shadow: 0 3px 12px rgba(16, 24, 40, .07);
+}
+.choice-row.live:hover .letter { border-color: var(--blue); }
+.choice-row.live:active { transform: scale(.995); }
 .choice {
   display: flex; flex: 1; gap: .7rem; align-items: flex-start; min-width: 0;
   text-align: left; font: inherit; font-size: 1.05rem; color: var(--ink);
@@ -290,17 +333,35 @@ kbd {
 .choice .letter {
   flex: 0 0 1.7rem; height: 1.7rem; display: grid; place-items: center;
   border: 1.5px solid var(--line-2); border-radius: 50%; font-weight: 650; font-size: .85rem;
+  transition: background .18s, border-color .18s, color .18s, transform .18s;
 }
 .choice .letter kbd { all: unset; }
-.choice-row.selected { border-color: var(--blue); background: var(--blue-soft); }
-.choice-row.selected .letter { border-color: var(--blue); background: var(--blue); color: #fff; }
-.choice-row.is-correct { border-color: var(--green); background: var(--green-soft); }
-.choice-row.is-correct .letter { border-color: var(--green); background: var(--green); color: #fff; }
-.choice-row.is-wrong { border-color: var(--red); background: var(--red-soft); }
-.choice-row.is-wrong .letter { border-color: var(--red); background: var(--red); color: #fff; }
+.choice-row.selected { border-color: var(--blue); background: var(--blue-soft); box-shadow: 0 0 0 3px var(--blue-soft); }
+.choice-row.selected .letter { border-color: var(--blue); background: var(--blue); color: var(--card); animation: letter-pop .32s cubic-bezier(.34, 1.56, .64, 1); }
+.choice-row.is-correct { border-color: var(--green); background: var(--green-soft); animation: row-right .6s ease-out; }
+.choice-row.is-correct .letter { border-color: var(--green); background: var(--green); color: var(--card); }
+.choice-row.is-wrong { border-color: var(--red); background: var(--red-soft); animation: row-wrong .5s ease-out; }
+.choice-row.is-wrong .letter { border-color: var(--red); background: var(--red); color: var(--card); }
 .choice-row.dimmed { opacity: .55; }
 .choice:disabled { cursor: default; }
 .choice-row.is-static .choice { cursor: default; }
+/* A non-colour signal for the graded row: colour-blind readers still get a
+   tick or cross, and the cross-out controls disappear once grading happens. */
+.choice-flag {
+  position: absolute; right: .75rem; top: 50%; width: 1.4rem; height: 1.4rem;
+  display: grid; place-items: center; border-radius: 50%;
+  transform: translateY(-50%) scale(.5); opacity: 0;
+  color: var(--card); font-size: .8rem; font-weight: 700;
+  transition: transform .22s cubic-bezier(.34, 1.56, .64, 1), opacity .18s;
+  pointer-events: none;
+}
+.choice-row.is-correct .choice-flag { opacity: 1; transform: translateY(-50%) scale(1); background: var(--green); }
+.choice-row.is-correct .choice-flag::before { content: "✓"; }
+.choice-row.is-wrong .choice-flag { opacity: 1; transform: translateY(-50%) scale(1); background: var(--red); }
+.choice-row.is-wrong .choice-flag::before { content: "✗"; }
+.choice-row:not(.live) .elim { display: none; }
+.choice-row:not(.live) .choice,
+.choice-row.is-static .choice { padding-right: 2.9rem; }
 
 /* --------------------------------------------------------- option eliminator */
 /* Cross out the choices you have ruled out: the button is undoable and
@@ -331,22 +392,140 @@ kbd {
   display: flex; align-items: center; gap: .5rem; font-weight: 650; margin-bottom: .6rem;
 }
 .verdict .icon {
-  width: 1.5rem; height: 1.5rem; border-radius: 50%; display: grid; place-items: center;
-  color: #fff; font-size: .9rem;
+  position: relative; width: 1.65rem; height: 1.65rem; border-radius: 50%;
+  display: grid; place-items: center; color: var(--card); font-size: .9rem;
 }
-.feedback { border-left: 4px solid var(--line-2); padding: .9rem 0 .9rem 1rem; }
-.feedback.correct { border-color: var(--green); }
+/* One expanding ring from the verdict badge; the card ring is the wider echo. */
+.verdict .icon::after {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%;
+  border: 2px solid currentColor; opacity: 0;
+  animation: icon-ripple .65s ease-out both;
+}
+.feedback { border-left: 4px solid var(--line-2); padding: .9rem 0 .9rem 1rem; animation: feedback-in .36s cubic-bezier(.2, .75, .25, 1) both; }
+/* A hit washes the panel green and a miss washes it red: the two states are
+   opposites at a glance, before any of the one-shot effects play. */
+.feedback.correct {
+  border-color: var(--green);
+  background: linear-gradient(90deg, var(--green-soft), transparent 78%);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
 .feedback.correct .icon { background: var(--green); }
+.feedback.correct .verdict .icon::after { border-color: var(--green); }
 .feedback.incorrect { border-color: var(--red); }
 .feedback.incorrect .icon { background: var(--red); }
+.feedback.incorrect .verdict .icon::after { border-color: var(--red); }
+.feedback .explanation { animation: rise-in .4s .08s both; }
+.feedback .reward { animation: rise-in .4s .16s both; }
+/* The reward line is the one piece of feedback worth reading twice, so it keeps
+   tabular figures; the delta is a chip and the new total counts up. */
+.reward {
+  display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .6rem;
+  margin-top: .75rem; padding-top: .7rem; border-top: 1px dashed var(--line);
+}
+.reward .mastery-now { color: var(--green); font-variant-numeric: tabular-nums; }
+.mastery-delta {
+  display: inline-block; min-width: 2.4rem; padding: .08rem .45rem; border-radius: 999px;
+  font-weight: 700; font-size: .8rem; text-align: center; font-variant-numeric: tabular-nums;
+  animation: delta-pop .35s cubic-bezier(.34, 1.56, .64, 1) both;
+}
+.mastery-delta.up { background: var(--green-soft); color: var(--green); }
+.mastery-delta.down { background: var(--red-soft); color: var(--red); }
+.mastery-delta.flat { min-width: 0; background: var(--card-2); color: var(--ink-3); font-weight: 600; }
+.review-chip {
+  margin-left: auto; display: inline-flex; align-items: center; gap: .25rem;
+  font-size: .78rem; color: var(--ink-3); background: var(--card-2);
+  border-radius: 999px; padding: .1rem .55rem; white-space: nowrap;
+}
+.streak-badge {
+  display: inline-block; margin-left: .5rem; padding: .05rem .5rem;
+  border-radius: 999px; background: var(--amber-soft); color: var(--amber);
+  font-size: .78rem; font-weight: 650; font-variant-numeric: tabular-nums;
+  animation: fx-chip .28s ease-out both;
+}
+.streak-badge.hot {
+  background: linear-gradient(100deg, var(--amber), var(--purple)); color: var(--card);
+  box-shadow: 0 0 0 3px var(--amber-soft);
+  animation: fx-chip .28s ease-out both, flame-flicker 1.6s ease-in-out .3s infinite;
+}
 
 /* --------------------------------------------------------- verdict effects */
-/* One-shot answer feedback: a ring pulse around the card for a hit, a shake for
-   a miss, and the verdict icon popping in either way. showQuestion drops the
-   effect class, so the same card node replays it on the next question. */
+/* One-shot answer feedback: a ring pulse plus a small bounce for a hit (a
+   second, warmer ring once a streak is running), a shake for a miss, the
+   verdict icon popping in either way, and sparks thrown from that icon on a
+   hit. showQuestion resets the card's className, so the same node replays it on
+   the next question. */
+@keyframes q-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes choice-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes letter-pop {
+  0% { transform: scale(.82); }
+  55% { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
+@keyframes row-right {
+  0% { box-shadow: 0 0 0 0 var(--green-soft); }
+  45% { box-shadow: 0 0 0 5px var(--green-soft); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes row-wrong {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  55% { transform: translateX(3px); }
+  80% { transform: translateX(-1px); }
+}
+@keyframes feedback-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes icon-ripple {
+  0% { opacity: .7; transform: scale(.7); }
+  70% { opacity: .18; }
+  100% { opacity: 0; transform: scale(2.1); }
+}
+@keyframes delta-pop {
+  from { transform: scale(.75); opacity: 0; }
+  60% { transform: scale(1.08); opacity: 1; }
+  to { transform: scale(1); opacity: 1; }
+}
+@keyframes chip-up {
+  0% { background: var(--green-soft); transform: translateY(0); }
+  35% { background: var(--green-soft); transform: translateY(-2px); }
+  100% { background: var(--card-2); transform: none; }
+}
+@keyframes chip-down {
+  0% { background: var(--red-soft); transform: translateY(0); }
+  35% { background: var(--red-soft); transform: translateY(2px); }
+  100% { background: var(--card-2); transform: none; }
+}
+@keyframes dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 3px var(--blue-soft); }
+}
+@keyframes flame-flicker {
+  0%, 100% { box-shadow: 0 0 0 3px var(--amber-soft); }
+  50% { box-shadow: 0 0 0 5px var(--amber-soft); }
+}
 @keyframes fx-ring {
   from { box-shadow: var(--shadow), 0 0 0 0 var(--green-soft); }
   to { box-shadow: var(--shadow), 0 0 0 14px transparent; }
+}
+@keyframes fx-ring-streak {
+  from { box-shadow: var(--shadow), 0 0 0 0 var(--amber-soft), 0 0 0 0 var(--green-soft); }
+  to { box-shadow: var(--shadow), 0 0 0 20px transparent, 0 0 0 30px transparent; }
+}
+@keyframes fx-bounce {
+  0% { transform: scale(1); }
+  38% { transform: scale(1.012); }
+  100% { transform: scale(1); }
 }
 @keyframes fx-shake {
   0%, 100% { transform: translateX(0); }
@@ -360,16 +539,62 @@ kbd {
   60% { transform: scale(1.12); opacity: 1; }
   to { transform: scale(1); opacity: 1; }
 }
-#qcard.fx-correct { animation: fx-ring .55s ease-out; }
+@keyframes fx-chip {
+  from { transform: translateY(4px) scale(.94); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes fx-spark {
+  0% {
+    transform: translate(-50%, -50%) translate(0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  55% { opacity: 1; }
+  100% {
+    transform: translate(-50%, -50%)
+               translate(var(--dx), calc(var(--dy) + var(--fall, 10px)))
+               rotate(var(--rot)) scale(.12);
+    opacity: 0;
+  }
+}
+/* Each question slides in; its choices follow in a short cascade. The effect
+   classes come later in this file, so a verdict overrides the entrance
+   animation if the question is answered immediately. */
+#qcard.q-enter { animation: q-in .4s cubic-bezier(.2, .75, .25, 1) both; }
+#qcard.q-enter .choice-item {
+  animation: choice-in .42s cubic-bezier(.2, .75, .25, 1) both;
+  animation-delay: calc(60ms + var(--i) * 45ms);
+}
+#qcard.fx-correct { animation: fx-ring .55s ease-out, fx-bounce .5s ease-out; }
+#qcard.fx-streak { animation: fx-ring-streak .7s ease-out, fx-bounce .5s ease-out; }
 #qcard.fx-wrong { animation: fx-shake .4s ease-out; }
 .verdict .icon { animation: fx-pop .3s ease-out both; }
 
+/* The spark layer is fixed to the viewport, built and removed by app.js for a
+   single correct answer, so it never intercepts a click. */
+.burst { position: fixed; inset: 0; pointer-events: none; z-index: 70; }
+.burst .spark {
+  position: absolute; width: 7px; height: 7px; border-radius: 2px;
+  background: var(--green); opacity: 0;
+  animation: fx-spark .78s cubic-bezier(.16, .7, .3, 1) forwards;
+}
+.burst .spark-1 { background: var(--blue); border-radius: 50%; }
+.burst .spark-2 { background: var(--amber); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+
 @media (prefers-reduced-motion: reduce) {
-  #qcard.fx-correct, #qcard.fx-wrong, .verdict .icon { animation: none; }
+  #qcard.q-enter, #qcard.q-enter .choice-item, #qcard.fx-correct,
+  #qcard.fx-streak, #qcard.fx-wrong, .verdict .icon, .verdict .icon::after,
+  .streak-badge, .reward, .feedback, .feedback .explanation, .feedback .reward,
+  .choice-why, .choice-row.is-correct, .choice-row.is-wrong, .choice-row.selected .letter,
+  .dot.current, .result-row, .mastery-delta, .mastery-pill.is-up, .mastery-pill.is-down,
+  .streak-chip.pop, .score-ring.done, #action { animation: none; }
+  .choice-row.live:hover { transform: none; }
+  .practice-view::before, #qcard { transition: none; }
+  .burst { display: none; }
 }
 .choice-why {
   font-size: 1rem; color: var(--ink-2);
   padding: .35rem .8rem .15rem 3.2rem;
+  animation: rise-in .35s .06s both;
 }
 .choice-why b { font-weight: 650; color: var(--ink); }
 .explanation p { margin: 0 0 .7em; }
@@ -391,6 +616,12 @@ pre.code {
   font-family: var(--mono); font-size: .78rem; line-height: 1.45; color: var(--ink-2);
 }
 
+/* Once a choice is picked, Check answer announces itself with one soft ring. */
+#action:not(:disabled) { animation: cta-ready .45s ease-out; }
+@keyframes cta-ready {
+  from { box-shadow: 0 0 0 0 var(--blue-soft); }
+  to { box-shadow: 0 0 0 7px transparent; }
+}
 .actions { display: flex; gap: .6rem; align-items: center; margin-top: 1rem; }
 .kbdhint { color: var(--ink-3); font-size: .78rem; margin-left: auto; text-align: right; }
 
@@ -410,11 +641,46 @@ tr:last-child td { border-bottom: none; }
 .spark-legend { display: flex; justify-content: space-between; font-size: .74rem; color: var(--ink-3); margin-top: .35rem; }
 table .bar { width: 110px; }
 
-.result-row { display: flex; gap: .6rem; align-items: center; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .88rem; }
+/* ---------------------------------------------------------------- results */
+.results-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .9rem; }
+.results-head h1 { margin-bottom: .1rem; }
+.results-head .muted { font-size: .85rem; }
+/* Conic-gradient ring filled by JS one percent at a time; no SVG or image. */
+.score-ring {
+  --pct: 0; --score-color: var(--green);
+  position: relative; flex: 0 0 auto; width: 112px; height: 112px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: conic-gradient(var(--score-color) calc(var(--pct) * 1%), var(--card-2) 0);
+  box-shadow: var(--shadow);
+}
+.score-ring::before {
+  content: ""; position: absolute; inset: 9px; border-radius: 50%;
+  background: var(--card); box-shadow: inset 0 0 0 1px var(--line);
+}
+.score-ring.tier-high { --score-color: var(--green); box-shadow: var(--shadow), 0 0 30px -6px var(--aura-right); }
+.score-ring.tier-mid { --score-color: var(--blue); }
+.score-ring.tier-low { --score-color: var(--amber); }
+.score-ring.done { animation: score-pop .45s ease-out; }
+.score-inner { position: relative; text-align: center; line-height: 1.05; }
+.score-inner b { display: block; font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.score-inner span { font-size: .66rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); }
+.stat b.ok { color: var(--green); }
+.stat b.no { color: var(--red); }
+
+.result-row { display: flex; gap: .6rem; align-items: center; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .88rem; animation: row-in .35s both; animation-delay: calc(var(--i, 0) * 35ms); }
 .result-row:last-child { border-bottom: none; }
 .result-row .n { color: var(--ink-3); width: 1.6rem; }
 .result-row .ok { color: var(--green); font-weight: 650; }
 .result-row .no { color: var(--red); font-weight: 650; }
+@keyframes row-in {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes score-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
 
 .review-item { border-top: 1px solid var(--line); padding-top: .9rem; margin-top: .9rem; }
 .review-item:first-child { border-top: none; margin-top: 0; padding-top: 0; }
@@ -443,4 +709,13 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .card { padding: .9rem; }
   .kbdhint { display: none; }
   .elim { width: 2rem; height: 2rem; margin-right: .4rem; }
+  .prac-head { gap: .45rem; }
+  .prac-tools { margin-left: 0; }
+  .mastery-pill { order: 1; }
+  .streak-chip { order: 2; }
+  .timer-pill { order: 3; }
+  .results-head { flex-wrap: wrap; }
+  .score-ring { width: 92px; height: 92px; }
+  .score-inner b { font-size: 1.25rem; }
+  .review-chip { margin-left: 0; }
 }

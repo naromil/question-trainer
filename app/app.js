@@ -182,11 +182,17 @@
   }
 
   /* ------------------------------------------------------ feedback effects */
-  /* Right and wrong are signalled twice: a one-shot animation on the question
-   * card, and a short synthesised tone. The tone is generated with WebAudio,
-   * so there are no audio assets to ship, and it is only ever created from the
-   * answer click (a user gesture), which is also what autoplay policy wants.
-   * Settings can mute it; motion follows prefers-reduced-motion in the CSS. */
+  /* A correct answer is rewarded on three channels that agree with each other:
+   * the card pulses (a warmer second ring once a streak is running), sparks
+   * burst from the verdict icon, and a synthesised chime lands — brighter for a
+   * first-time correct than for a repeat, with a note added every few of a
+   * run. A miss keeps the single shake and the low two-tone, so the pair stays
+   * legible as opposites.
+   *
+   * Audio is WebAudio, so no assets ship and nothing plays until the answer
+   * click (a user gesture), which is also what autoplay policy wants. Settings
+   * can mute the sound; prefers-reduced-motion skips every animation and the
+   * spark layer, and the textual reward is identical either way. */
   var audioCtx = null;
   var hasAudioCtx = false;
 
@@ -214,26 +220,189 @@
     osc.stop(at + dur + 0.02);
   }
 
-  function playVerdict(correct) {
+  /* How many extra notes a running streak earns. Capped at three: a long run
+   * should feel good, not turn every answer into a fanfare. */
+  function streakNotes(streak) {
+    if (streak >= 8) return 3;
+    if (streak >= 5) return 2;
+    if (streak >= 3) return 1;
+    return 0;
+  }
+
+  function playVerdict(reward) {
     if (!state.settings.sound) return;
     var ctx = audio();
     if (!ctx) return;
     if (ctx.state === 'suspended') ctx.resume();
     var at = ctx.currentTime + 0.01;
-    if (correct) {
-      note(ctx, 660, at, 0.12, 'sine', 0.08);
-      note(ctx, 990, at + 0.11, 0.16, 'sine', 0.08);
-    } else {
+    if (!reward.correct) {
       note(ctx, 196, at, 0.17, 'square', 0.05);
       note(ctx, 147, at + 0.13, 0.22, 'square', 0.05);
+      return;
+    }
+    note(ctx, 660, at, 0.12, 'sine', 0.08);
+    note(ctx, 990, at + 0.11, 0.16, 'sine', 0.08);
+    /* A first-time correct is the one that pays full mastery, so it lands an
+     * octave above the repeat coin: the ear separates "new" from "again"
+     * without reading the chip. */
+    if (reward.coin === 'new') note(ctx, 1320, at + 0.22, 0.20, 'triangle', 0.05);
+    var extra = streakNotes(reward.streak);
+    if (extra >= 1) note(ctx, 1188, at + 0.30, 0.14, 'sine', 0.06);
+    if (extra >= 2) note(ctx, 1320, at + 0.40, 0.16, 'sine', 0.06);
+    if (extra >= 3) note(ctx, 1584, at + 0.52, 0.30, 'sine', 0.05);
+  }
+
+  function reduceMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  /* Sparks thrown from the verdict icon. DOM nodes rather than a canvas: a
+   * dozen spans for under a second cost nothing, inherit the theme's colours
+   * through CSS variables, and leave no resize or DPR handling behind. */
+  function burst(anchor, count) {
+    if (reduceMotion() || !anchor || !anchor.isConnected) return;
+    var rect = anchor.getBoundingClientRect();
+    var layer = document.createElement('div');
+    layer.className = 'burst';
+    layer.setAttribute('aria-hidden', 'true');
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    for (var i = 0; i < count; i++) {
+      var dot = document.createElement('span');
+      var angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+      var dist = 34 + Math.random() * 54;
+      var size = 4 + Math.random() * 4;
+      dot.className = 'spark spark-' + (i % 3);
+      dot.style.left = cx + 'px';
+      dot.style.top = cy + 'px';
+      dot.style.width = size + 'px';
+      dot.style.height = size + 'px';
+      dot.style.setProperty('--dx', Math.cos(angle) * dist + 'px');
+      dot.style.setProperty('--dy', (Math.sin(angle) * dist - 12) + 'px');
+      dot.style.setProperty('--fall', Math.round(8 + Math.random() * 28) + 'px');
+      dot.style.setProperty('--rot', (Math.random() * 240 - 120) + 'deg');
+      dot.style.animationDelay = (i % 4) * 12 + 'ms';
+      layer.appendChild(dot);
+    }
+    document.body.appendChild(layer);
+    window.setTimeout(function () {
+      if (layer.parentNode) layer.parentNode.removeChild(layer);
+    }, 1100);
+  }
+
+  /* The mastery total counts up instead of appearing, so the reward reads as a
+   * change rather than as a static label. */
+  function countUp(el, from, to, suffix) {
+    if (!el) return;
+    el.textContent = from + suffix;
+    if (reduceMotion() || from === to) { el.textContent = to + suffix; return; }
+    var start = null;
+    var span = 420;
+    function step(ts) {
+      if (start == null) start = ts;
+      var t = Math.min(1, (ts - start) / span);
+      var eased = 1 - Math.pow(1 - t, 3);
+      el.textContent = Math.round(from + (to - from) * eased) + suffix;
+      if (t < 1) window.requestAnimationFrame(step);
+    }
+    window.requestAnimationFrame(step);
+  }
+
+  /* The header repeats the live mastery total, so it animates the same way as
+   * the reward line and changes colour for the direction of the answer. */
+  function updatePracticeStatus(result, streak) {
+    var view = document.getElementById('practice-view');
+    if (view) {
+      view.setAttribute('data-mood',
+        !result.correct ? 'wrong' : (streak >= 3 ? 'streak' : 'right'));
+    }
+    var chip = document.getElementById('mastery-pill');
+    if (chip) {
+      chip.classList.remove('is-up', 'is-down');
+      void chip.offsetWidth;
+      if (result.pointsDelta > 0) chip.classList.add('is-up');
+      else if (result.pointsDelta < 0) chip.classList.add('is-down');
+    }
+    countUp(document.getElementById('mastery-pill-value'),
+      result.pointsBefore, result.pointsAfter, '%');
+    var run = document.getElementById('streak-chip');
+    if (!run) return;
+    if (streak >= 2) {
+      var value = document.getElementById('streak-value');
+      if (value) value.textContent = streak;
+      run.hidden = false;
+      run.classList.toggle('hot', streak >= 5);
+      run.classList.remove('pop');
+      void run.offsetWidth;
+      run.classList.add('pop');
+    } else {
+      run.hidden = true;
     }
   }
 
-  /* The card carries the effect class for one animation; showQuestion drops it
-   * again, so the same node can replay it on the next question. */
-  function flashCard(correct) {
+  /* The results ring fills from empty to the session score; the number and the
+   * conic-gradient share one eased clock so they cannot disagree. */
+  function animateScore(percent) {
+    var ring = document.getElementById('score-ring');
+    var value = document.getElementById('score-value');
+    if (!ring || !value) return;
+    if (reduceMotion()) {
+      ring.style.setProperty('--pct', percent);
+      value.textContent = percent + '%';
+      return;
+    }
+    var start = null;
+    var span = 720;
+    function step(ts) {
+      if (start == null) start = ts;
+      var t = Math.min(1, (ts - start) / span);
+      var eased = 1 - Math.pow(1 - t, 3);
+      var shown = Math.round(percent * eased);
+      ring.style.setProperty('--pct', shown);
+      value.textContent = shown + '%';
+      if (t < 1) window.requestAnimationFrame(step);
+      else ring.classList.add('done');
+    }
+    window.requestAnimationFrame(step);
+  }
+
+  /* A finished session gets a short rising chord; it only plays for a solid
+   * score and only when sound is on, so a weak run stays quiet. */
+  function playResults(percent) {
+    if (!state.settings.sound || percent < 70) return;
+    var ctx = audio();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume();
+    var at = ctx.currentTime + 0.05;
+    var chord = [523.25, 659.25, 783.99];
+    for (var i = 0; i < chord.length; i++) {
+      note(ctx, chord[i], at + i * 0.09, 0.34, 'sine', 0.055);
+    }
+    if (percent >= 100) note(ctx, 1046.5, at + 0.3, 0.4, 'triangle', 0.05);
+  }
+
+  /* The card carries the effect class for one animation; showQuestion resets
+   * the card's className, so the same node replays it on the next question. */
+  function flashCard(reward) {
     var card = document.getElementById('qcard');
-    if (card) card.classList.add(correct ? 'fx-correct' : 'fx-wrong');
+    if (!card) return;
+    card.classList.remove('fx-correct', 'fx-wrong', 'fx-streak');
+    if (!reward.correct) { card.classList.add('fx-wrong'); return; }
+    card.classList.add('fx-correct');
+    if (reward.streak >= 3) card.classList.add('fx-streak');
+  }
+
+  /* One call for the whole reward, so the three channels cannot drift apart:
+   * card pulse, spark burst, chime — each scaled to what the answer was worth. */
+  function celebrate(reward, pointsBefore) {
+    flashCard(reward);
+    playVerdict(reward);
+    if (!reward.correct) return;
+    var count = reward.coin === 'new' ? 16 : 10;
+    if (reward.streak >= 5) count += 6;
+    else if (reward.streak >= 3) count += 3;
+    burst(document.querySelector('#feedback .verdict .icon'), count);
+    countUp(document.getElementById('mastery-now'), pointsBefore, reward.pointsAfter, '%');
   }
 
   /* ------------------------------------------------------------ data load */
@@ -853,15 +1022,26 @@
     if (!session || !session.questions.length) { renderEmptySession(); return; }
     if (session.index >= session.questions.length) { renderResults(); return; }
 
+    var record = state.sets[set.id] || {};
+    var mastery = Math.round(record.points || 0);
+    var run = record.streak || 0;
+
     appEl.innerHTML =
-      '<div class="practice-view">' +
+      '<div class="practice-view" id="practice-view">' +
         '<div class="prac-head">' +
           '<a class="btn btn-ghost btn-sm" href="#/">← Sets</a>' +
           '<div class="head-title"><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
             esc(modeLabel(session.cfg.mode)) + '</span></div>' +
-          '<div class="dots" id="dots"></div>' +
-          '<span class="pill" id="timer">0:00</span>' +
+          '<div class="prac-tools">' +
+            '<span class="pill mastery-pill" id="mastery-pill" title="Mastery in ' +
+              esc(set.title) + '">Mastery <b id="mastery-pill-value">' + mastery + '%</b></span>' +
+            '<span class="pill streak-chip" id="streak-chip"' +
+              (run >= 2 ? '' : ' hidden') + ' title="Correct answers in a row in this set">' +
+              '🔥 <b id="streak-value">' + run + '</b></span>' +
+            '<span class="pill timer-pill" id="timer">0:00</span>' +
+          '</div>' +
         '</div>' +
+        '<div class="dots" id="dots"></div>' +
         '<div class="card" id="qcard"></div>' +
       '</div>';
 
@@ -916,6 +1096,7 @@
       '<button type="button" class="choice" data-i="' + index + '" aria-pressed="false">' +
         '<span class="letter">' + letter + '</span>' +
         '<span class="choice-text">' + esc(text) + '</span></button>' +
+      '<span class="choice-flag" aria-hidden="true"></span>' +
       elimHTML(index, letter) + '</div>';
   }
 
@@ -924,10 +1105,17 @@
     session.selected = null;
     session.checked = false;
     session.excluded = {};
+    /* A fast key sequence can reach the next question while the last burst is
+     * still in the air; drop those layers so sparks never trail onto a fresh
+     * question. */
+    $$('.burst').forEach(function (layer) {
+      if (layer.parentNode) layer.parentNode.removeChild(layer);
+    });
     renderDots();
 
     var choices = question.choices.map(function (text, i) {
-      return '<li class="choice-item">' + choiceHTML(i, question, text) + '</li>';
+      return '<li class="choice-item" style="--i:' + i + '">' +
+        choiceHTML(i, question, text) + '</li>';
     }).join('');
 
     var card = document.getElementById('qcard');
@@ -950,6 +1138,12 @@
           '<kbd>1</kbd>–<kbd>9</kbd> choose · <kbd>Enter</kbd> check / next</span>' +
       '</div>' +
       '<div id="feedback" aria-live="polite"></div>';
+
+    /* A fresh question slides in and its choices cascade; the stage halo
+     * returns to neutral until this question is graded. */
+    card.classList.add('q-enter');
+    var view = document.getElementById('practice-view');
+    if (view) view.removeAttribute('data-mood');
 
     $$('#choices .choice').forEach(function (button) {
       button.addEventListener('click', function () {
@@ -1037,7 +1231,8 @@
       var cls = i === question.answer ? ' is-correct' : ' dimmed';
       return '<li class="choice-item"><div class="choice-row is-static' + cls + '">' +
         '<div class="choice"><span class="letter">' + letter + '</span>' +
-        '<span class="choice-text">' + esc(text) + '</span></div></div>' +
+        '<span class="choice-text">' + esc(text) + '</span></div>' +
+        '<span class="choice-flag" aria-hidden="true"></span></div>' +
         whyBlockHTML(question, i) + '</li>';
     }).join('');
     return passageHTML(question.passage) +
@@ -1131,15 +1326,33 @@
     actionBtn.textContent = last ? 'See results' : 'Next question';
     actionBtn.disabled = false;
 
-    var mastery = result.pointsDelta === 0
-      ? '<span class="muted">mastery unchanged (already at 0 or 100)</span>'
-      : (result.pointsDelta > 0 ? '+' : '') + result.pointsDelta + ' mastery in ' +
-        esc(session.set.title) + ' → ' + result.pointsAfter + '%';
+    /* The reward line: the mastery delta with the new total counting up, the
+     * streak once there is one to show, and when the item comes back. */
+    var streak = (state.sets[session.set.id] || {}).streak || 0;
+    /* core's answer result carries what the answer was worth, not the running
+     * streak (that lives on the set record), so the reward reads both here and
+     * the effects scale from one object instead of from two sources. */
+    var reward = {
+      correct: result.correct,
+      coin: result.coin,
+      streak: streak,
+      pointsAfter: result.pointsAfter
+    };
+    var signed = (result.pointsDelta > 0 ? '+' : '') + result.pointsDelta;
+    var masteryClass = result.pointsDelta > 0 ? 'up' : (result.pointsDelta < 0 ? 'down' : 'flat');
+    var mastery = '<span class="mastery-delta ' + masteryClass + '">' + signed + '</span>' +
+      ' <span class="muted">mastery · <b class="mastery-now" id="mastery-now">' +
+        result.pointsAfter + '%</b></span>';
 
     var gapDays = C.SRS_INTERVALS_DAYS[result.boxAfter];
     var when = gapDays === 0
       ? 'back in the next review session'
       : 'next review in ' + plural(gapDays, 'day');
+
+    var streakBadge = (result.correct && streak >= 2)
+      ? ' <span class="streak-badge' + (streak >= 5 ? ' hot' : '') + '">🔥 ' +
+        streak + ' in a row</span>'
+      : '';
 
     document.getElementById('feedback').innerHTML =
       '<div class="feedback ' + (result.correct ? 'correct' : 'incorrect') + '">' +
@@ -1148,14 +1361,16 @@
             ? 'Correct' + (result.coin === 'repeat' ? ' (already answered right before)' : '')
             : 'Not quite — the answer is ' + result.expected +
               (result.chosen !== result.expected ? ' (you chose ' + result.chosen + ')' : '')) +
+          streakBadge +
         '</div>' +
         explanationHTML(question) +
-        '<div class="small muted" style="margin-top:.6rem">' + mastery + ' · ' + when +
+        '<div class="reward small">' + mastery +
+          '<span class="review-chip">↻ ' + when + '</span>' +
         '</div>' +
       '</div>';
+    updatePracticeStatus(result, streak);
     renderDots();
-    flashCard(result.correct);
-    playVerdict(result.correct);
+    celebrate(reward, result.pointsBefore);
   }
 
   function nextQuestion() {
@@ -1180,7 +1395,7 @@
 
     var rows = results.map(function (r, i) {
       var question = r.question;
-      return '<div class="result-row">' +
+      return '<div class="result-row" style="--i:' + i + '">' +
         '<span class="n">' + (i + 1) + '</span>' +
         '<span class="' + (r.correct ? 'ok' : 'no') + '">' + (r.correct ? '✓' : '✗') + '</span>' +
         '<span class="grow">' + esc(question.question.slice(0, 80)) +
@@ -1196,16 +1411,23 @@
         '</span></div>' + staticQuestionHTML(r.question) + '</div>';
     }).join('');
 
+    var scoreTier = percent >= 80 ? 'high' : (percent >= 50 ? 'mid' : 'low');
+    var deltaClass = delta > 0 ? 'ok' : (delta < 0 ? 'no' : '');
     var time = fmtTime(elapsedMs());
     appEl.innerHTML =
-      '<div class="card"><div class="spread"><h1>Session complete</h1>' +
-        '<span class="muted">' + esc(sessionTitle()) + ' · ' +
-        esc(modeLabel(session.cfg.mode)) + ' · ' + time + '</span></div>' +
+      '<div class="card"><div class="results-head"><div>' +
+        '<h1>Session complete</h1><div class="muted">' + esc(sessionTitle()) + ' · ' +
+        esc(modeLabel(session.cfg.mode)) + ' · ' + time + '</div></div>' +
+        '<div class="score-ring tier-' + scoreTier + '" id="score-ring">' +
+          '<div class="score-inner"><b id="score-value">0%</b><span>score</span></div>' +
+        '</div>' +
+      '</div>' +
       '<div class="statgrid">' +
         '<div class="stat"><b>' + correct + '/' + results.length +
           '</b><span>correct</span></div>' +
-        '<div class="stat"><b>' + percent + '%</b><span>this session</span></div>' +
         '<div class="stat"><b>' + missed.length + '</b><span>coming back in review</span></div>' +
+        '<div class="stat"><b class="' + deltaClass + '">' +
+          (delta > 0 ? '+' : '') + delta + '</b><span>mastery this session</span></div>' +
       '</div>' +
       '<div class="row" style="margin-top:.9rem">' +
         (missed.length ? '<button class="btn btn-primary" id="retry">Retry the ' +
@@ -1219,6 +1441,13 @@
       '<div class="card"><h3>Question by question</h3>' + rows + '</div>' +
       (review ? '<div class="card"><h3>Review your misses</h3>' + review + '</div>' : '');
 
+    animateScore(percent);
+    playResults(percent);
+    if (percent >= 80) {
+      window.setTimeout(function () {
+        burst(document.getElementById('score-ring'), percent >= 100 ? 34 : 24);
+      }, 420);
+    }
     var again = document.getElementById('again');
     if (again) {
       again.addEventListener('click', function () {
@@ -1371,8 +1600,9 @@
       '<h4 style="margin-top:1.1rem">Feedback</h4>' +
       '<label class="field"><input type="checkbox" id="s-sound"' +
         (state.settings.sound ? ' checked' : '') + '> Sound effect on a correct and on a ' +
-        'wrong answer <span class="muted small">(right and wrong also flash the card; the ' +
-        'clock pauses while you read the feedback either way)</span></label>' +
+        'wrong answer <span class="muted small">(a right answer also pulses the card, throws ' +
+        'sparks from the tick, counts the new mastery up and chimes a note longer once a ' +
+        'streak is running; the clock pauses while you read the feedback either way)</span></label>' +
       '</div>' +
       '<div class="card"><h3>Question data</h3>' +
       '<p class="small muted">Loaded <b>' + SOURCE_SETS.length + '</b> ' +
@@ -1412,8 +1642,9 @@
     $('#s-sound').addEventListener('change', function (event) {
       state.settings.sound = event.target.checked;
       saveState();
-      /* Switching it on plays the chime once, so the setting proves itself. */
-      if (state.settings.sound) playVerdict(true);
+      /* Switching it on chimes once, so the setting proves itself with the same
+       * reward a first-time correct earns. */
+      if (state.settings.sound) playVerdict({ correct: true, coin: 'new', streak: 0 });
     });
     $('#export').addEventListener('click', function () {
       var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
