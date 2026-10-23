@@ -940,3 +940,81 @@ test('activity reports the requested window, ending today', () => {
   assert.equal(days[days.length - 1].a, 3);
   assert.equal(days[0].a, 0);
 });
+
+/* ---------------------------------------------------------- home list */
+
+function homeRows() {
+  return [
+    { id: 'geo', title: 'World Capitals', description: 'Cities and Countries',
+      units: 2, unitRows: [{ title: 'Europe' }, { title: 'Asia' }] },
+    { id: 'bio', title: 'Biology', description: 'Cells and plants',
+      units: 1, unitRows: [{ title: 'Cells' }] },
+    { id: 'code', title: 'Algorithms', description: '',
+      units: 1, unitRows: [{ title: 'Sorting' }] }
+  ];
+}
+
+test('filterSetRows: matches title, description and unit titles case-insensitively', () => {
+  const rows = homeRows();
+  assert.deepEqual(C.filterSetRows(rows, 'WORLD').map((row) => row.id), ['geo']);
+  assert.deepEqual(C.filterSetRows(rows, 'countries').map((row) => row.id), ['geo']);
+  assert.deepEqual(C.filterSetRows(rows, 'asia').map((row) => row.id), ['geo'],
+    'a unit title keeps its set visible');
+  assert.deepEqual(C.filterSetRows(rows, 'sorted'), [], 'partial words do not match');
+  assert.deepEqual(C.filterSetRows(rows, 'sorting').map((row) => row.id), ['code']);
+  assert.deepEqual(C.filterSetRows(rows, '  ').length, 3, 'blank query keeps every row');
+  assert.deepEqual(C.filterSetRows(rows, 'zzz'), []);
+});
+
+test('filterSetRows: works with real setStats rows through their unit titles', () => {
+  const set = loadSet(
+    rawSet({ id: 'europe', title: 'Europe', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'asia', title: 'Asia', questions: [question({ id: 'q2' })] })
+  );
+  const rows = [C.setStats(C.emptyState(NOW), set, NOW)];
+  assert.equal(C.filterSetRows(rows, 'Asia').length, 1);
+  assert.equal(C.filterSetRows(rows, 'Europe').length, 1);
+  assert.equal(C.filterSetRows(rows, 'nowhere').length, 0);
+});
+
+test('sortSetRows: index, title, mastery and due orders', () => {
+  const rows = [
+    { id: 'a', title: 'Beta', points: 30, due: 2 },
+    { id: 'b', title: 'Alpha', points: 50, due: 0 },
+    { id: 'c', title: 'Gamma', points: 50, due: 5 },
+    { id: 'd', title: 'Delta', points: 10, due: 5 }
+  ];
+  assert.deepEqual(C.sortSetRows(rows, 'index').map((row) => row.id), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(C.sortSetRows(rows, 'title').map((row) => row.id), ['b', 'a', 'd', 'c']);
+  assert.deepEqual(C.sortSetRows(rows, 'mastery').map((row) => row.id), ['b', 'c', 'a', 'd'],
+    'equal mastery keeps source order');
+  assert.deepEqual(C.sortSetRows(rows, 'due').map((row) => row.id), ['c', 'd', 'a', 'b'],
+    'equal due counts keep source order');
+  assert.deepEqual(rows.map((row) => row.id), ['a', 'b', 'c', 'd'],
+    'the input array is not reordered');
+});
+
+test('sortSetRows: every mode falls back to source order on a tie', () => {
+  const rows = [
+    { id: 'first', title: 'Same', points: 20, due: 3 },
+    { id: 'second', title: 'Same', points: 20, due: 3 },
+    { id: 'third', title: 'Same', points: 20, due: 3 }
+  ];
+  ['index', 'title', 'mastery', 'due'].forEach((mode) => {
+    assert.deepEqual(C.sortSetRows(rows, mode).map((row) => row.id),
+      ['first', 'second', 'third'], mode);
+  });
+  assert.deepEqual(C.sortSetRows(rows, 'nonsense').map((row) => row.id),
+    ['first', 'second', 'third'], 'unknown mode keeps index order');
+});
+
+/* -------------------------------------------------------------- themes */
+
+test('nextTheme: auto -> light -> dark -> auto and unknown values fall back to auto', () => {
+  assert.equal(C.nextTheme('auto'), 'light');
+  assert.equal(C.nextTheme('light'), 'dark');
+  assert.equal(C.nextTheme('dark'), 'auto');
+  assert.equal(C.nextTheme('neon'), 'light', 'an unknown value is treated as auto');
+  assert.equal(C.nextTheme(undefined), 'light');
+  assert.equal(C.nextTheme(null), 'light');
+});

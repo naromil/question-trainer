@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -36,6 +37,11 @@ MAX_BODY = 2 * 1024 * 1024
 STATE_APP = "question-trainer"
 STATE_VERSION = 1
 IDLE_TIMEOUT = 300.0
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; connect-src 'self'; object-src 'none'; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+)
 
 
 def is_progress_state(payload: object) -> bool:
@@ -46,6 +52,15 @@ def is_progress_state(payload: object) -> bool:
         and type(payload.get("v")) is int
         and payload.get("v") == STATE_VERSION
     )
+
+
+def is_progress_bytes(body: bytes) -> bool:
+    """True when ``body`` is UTF-8 JSON holding a valid progress state."""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return is_progress_state(payload)
 
 
 class TrainerServer(ThreadingHTTPServer):
@@ -65,13 +80,17 @@ class TrainerHandler(SimpleHTTPRequestHandler):
         kwargs["directory"] = str(ROOT)
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
-    # Every response, including errors and generated directory listings, is
-    # uncacheable so a reload always sees the current data and progress. The
+    # Every response, including errors, is uncacheable so a reload always sees
+    # the current data and progress, and carries the same security policy. The
     # marker header lets a second launch recognise an instance of its own.
     def end_headers(self) -> None:
         self.server.last_activity = time.monotonic()
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
         self.send_header("X-Question-Trainer", "1")
         super().end_headers()
 
@@ -87,31 +106,109 @@ class TrainerHandler(SimpleHTTPRequestHandler):
             or "\x00" in path
         )
 
-    def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+    def _hidden_path(self) -> bool:
+        """True for dotfiles and dot-directories, which are never public."""
+        path = urllib.parse.unquote(self._route())
+        return any(part.startswith(".") for part in path.split("/") if part)
+
+    def _backup_path(self) -> Path:
+        return self.progress_path.with_name(self.progress_path.name + ".bak")
+
+    def _serves_progress_file(self) -> bool:
+        """True when the request resolves to the progress file or its backup."""
+        candidate = self.translate_path(self.path)
+        for private in (self.progress_path, self._backup_path()):
+            try:
+                if os.path.samefile(candidate, private):
+                    return True
+            except OSError:
+                if os.path.realpath(candidate) == os.path.realpath(private):
+                    return True
+        return False
+
+    def _redirect_to_app(self) -> bool:
+        """Send the bare root and /app to the app directory itself."""
+        if self._route() not in ("/", "/app"):
+            return False
+        self.send_response(302)
+        self.send_header("Location", APP_PATH)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return True
+
+    def _send_bytes(
+        self, status: int, body: bytes, content_type: str, source: str | None = None
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         if self.path.split("?", 1)[0] == API_PATH:
             self.send_header("X-Progress-Path", str(self.progress_path))
+        if source is not None:
+            self.send_header("X-Progress-Source", source)
         self.end_headers()
-        if body:
+        if body and self.command != "HEAD":
             self.wfile.write(body)
+
+    def list_directory(self, path: str) -> None:
+        """Never expose a directory listing; a listing is a missing page."""
+        self._send_bytes(404, b"not found\n", "text/plain; charset=utf-8")
 
     def _send_json(self, status: int, payload: object) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self._send_bytes(status, body, "application/json; charset=utf-8")
 
-    def _get_progress(self) -> None:
+    def _progress_snapshot(self) -> tuple[int, bytes, str | None, str | None]:
+        """Resolve the progress bytes to serve, preferring the primary file.
+
+        Returns ``(status, body, source, error)``: 200 with the primary or the
+        recovered backup state, 204 when no progress file exists at all, or 500
+        when files exist but none holds a valid progress state.
+        """
+        primary: bytes | None = None
+        primary_missing = False
+        primary_error: OSError | None = None
         try:
-            with self.progress_lock:
-                body = self.progress_path.read_bytes()
+            primary = self.progress_path.read_bytes()
         except FileNotFoundError:
-            self._send_bytes(204, b"", "application/json; charset=utf-8")
-            return
+            primary_missing = True
         except OSError as exc:
-            self._send_json(500, {"error": f"could not read progress: {exc}"})
-            return
-        self._send_bytes(200, body, "application/json; charset=utf-8")
+            primary_error = exc
+
+        if primary is not None and is_progress_bytes(primary):
+            return 200, primary, "primary", None
+
+        backup: bytes | None = None
+        backup_error: OSError | None = None
+        try:
+            backup = self._backup_path().read_bytes()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            backup_error = exc
+
+        if backup is not None and is_progress_bytes(backup):
+            return 200, backup, "backup", None
+
+        if primary_missing and backup is None and backup_error is None:
+            return 204, b"", None, None
+        if primary_error is not None:
+            return 500, b"", None, f"could not read progress: {primary_error}"
+        if backup_error is not None:
+            return 500, b"", None, f"could not read progress backup: {backup_error}"
+        return 500, b"", None, (
+            "progress is not a valid progress state and no valid backup exists"
+        )
+
+    def _get_progress(self) -> None:
+        with self.progress_lock:
+            status, body, source, error = self._progress_snapshot()
+        if status == 200:
+            self._send_bytes(200, body, "application/json; charset=utf-8", source)
+        elif status == 204:
+            self._send_bytes(204, b"", "application/json; charset=utf-8")
+        else:
+            self._send_json(500, {"error": error})
 
     def _read_body(self) -> bytes | None:
         header = self.headers.get("Content-Length")
@@ -136,6 +233,25 @@ class TrainerHandler(SimpleHTTPRequestHandler):
             return None
         return body
 
+    def _write_backup(self, body: bytes) -> None:
+        """Atomically replace ``<progress>.bak`` with the previous bytes."""
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=self._backup_path().name + ".",
+            suffix=".tmp",
+            dir=str(self.progress_path.parent),
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(body)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self._backup_path())
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
     def _write_progress(self, payload: dict) -> None:
         directory = self.progress_path.parent
         directory.mkdir(parents=True, exist_ok=True)
@@ -148,6 +264,13 @@ class TrainerHandler(SimpleHTTPRequestHandler):
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            # Preserve the state being replaced; skip it on the first write.
+            try:
+                previous = self.progress_path.read_bytes()
+            except FileNotFoundError:
+                previous = None
+            if previous is not None:
+                self._write_backup(previous)
             os.replace(temporary, self.progress_path)
         finally:
             try:
@@ -178,13 +301,21 @@ class TrainerHandler(SimpleHTTPRequestHandler):
             return
         self._send_bytes(204, b"", "application/json; charset=utf-8")
 
-    def do_GET(self) -> None:  # noqa: N802 - stdlib naming
-        route = self._route()
-        if route == API_PATH:
-            self._get_progress()
-            return
+    def _reject_static_path(self) -> bool:
+        """Answer unsafe, hidden, and private paths before static serving."""
         if self._unsafe_path():
             self._send_json(403, {"error": "path traversal is not allowed"})
+            return True
+        if self._hidden_path() or self._serves_progress_file():
+            self._send_json(404, {"error": "not found"})
+            return True
+        return False
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib naming
+        if self._route() == API_PATH:
+            self._get_progress()
+            return
+        if self._redirect_to_app() or self._reject_static_path():
             return
         super().do_GET()
 
@@ -196,17 +327,9 @@ class TrainerHandler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self) -> None:  # noqa: N802 - stdlib naming
         if self._route() == API_PATH:
-            if self.progress_path.exists():
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(self.progress_path.stat().st_size))
-                self.send_header("X-Progress-Path", str(self.progress_path))
-                self.end_headers()
-            else:
-                self._send_bytes(204, b"", "application/json; charset=utf-8")
+            self._get_progress()
             return
-        if self._unsafe_path():
-            self._send_json(403, {"error": "path traversal is not allowed"})
+        if self._redirect_to_app() or self._reject_static_path():
             return
         super().do_HEAD()
 
@@ -245,6 +368,15 @@ def probe_running(host: str, port: int) -> tuple[str, str | None] | None:
             if response.headers.get("X-Question-Trainer") != "1":
                 return None
             return base + APP_PATH, response.headers.get("X-Progress-Path")
+    except urllib.error.HTTPError as exc:
+        # A corrupt progress file answers 500, but the marker and path headers
+        # still identify this server; keep the launcher attaching to it.
+        try:
+            if exc.headers.get("X-Question-Trainer") != "1":
+                return None
+            return base + APP_PATH, exc.headers.get("X-Progress-Path")
+        finally:
+            exc.close()
     except OSError:
         return None
 

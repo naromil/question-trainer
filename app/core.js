@@ -81,6 +81,14 @@
     return sanitizeLength(settings.length);
   }
 
+  /* The top-bar theme button walks auto -> light -> dark -> auto. An unknown
+   * stored value is treated as auto, so its first click starts at light. */
+  function nextTheme(theme) {
+    if (theme === 'light') return 'dark';
+    if (theme === 'dark') return 'auto';
+    return 'light';
+  }
+
   function dayKey(ms) {
     var d = new Date(ms);
     var m = d.getMonth() + 1;
@@ -850,6 +858,45 @@
     return sets.map(function (set) { return setStats(state, set, now); });
   }
 
+  /* Home search: a query matches the set title, its description, or any unit
+   * title, case-insensitively, so a set found through one of its units stays
+   * visible. Rows are setStats() objects. */
+  function filterSetRows(rows, query) {
+    var needle = typeof query === 'string' ? query.trim().toLowerCase() : '';
+    if (!needle) return (rows || []).slice();
+    return (rows || []).filter(function (row) {
+      if (!row) return false;
+      var hay = [row.title, row.description];
+      var units = row.set ? unitsOf(row.set) : [];
+      units.forEach(function (unit) { hay.push(unit.title); });
+      if (!units.length && row.unitRows) {
+        row.unitRows.forEach(function (unitRow) { hay.push(unitRow.title); });
+      }
+      return hay.some(function (value) {
+        return String(value == null ? '' : value).toLowerCase().indexOf(needle) >= 0;
+      });
+    });
+  }
+
+  /* Home order. Ties keep source order in every mode: the original index is
+   * carried alongside and used as the final tiebreak, so the result does not
+   * depend on the engine's sort stability. */
+  function sortSetRows(rows, sort) {
+    var keyed = (rows || []).map(function (row, i) { return { row: row, i: i }; });
+    keyed.sort(function (a, b) {
+      var d = 0;
+      if (sort === 'title') {
+        d = String(a.row.title || '').localeCompare(String(b.row.title || ''));
+      } else if (sort === 'mastery') {
+        d = (b.row.points || 0) - (a.row.points || 0);
+      } else if (sort === 'due') {
+        d = (b.row.due || 0) - (a.row.due || 0);
+      }
+      return d || a.i - b.i;
+    });
+    return keyed.map(function (entry) { return entry.row; });
+  }
+
   function overallStats(state, sets, now) {
     now = now || Date.now();
     var rows = allSetStats(state, sets, now);
@@ -1136,7 +1183,10 @@
     emptyState: emptyState,
     sanitizeState: sanitizeState,
     sessionLength: sessionLength,
+    nextTheme: nextTheme,
     applyAnswer: applyAnswer,
+    filterSetRows: filterSetRows,
+    sortSetRows: sortSetRows,
     tierOf: tierOf,
     masteryOf: masteryOf,
     dueQuestions: dueQuestions,

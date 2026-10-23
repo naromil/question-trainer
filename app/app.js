@@ -5,8 +5,9 @@
  *
  * Reads questions/index.json and the set files it lists at startup, depends on
  * window.QTCore for the pure logic. Progress lives in localStorage and, when
- * served by serve.py, is mirrored to disk. An in-flight session is only in
- * memory: a reload restarts the session, but every graded answer is saved.
+ * served by serve.py, is mirrored to disk. An in-flight session is kept in
+ * sessionStorage, so a reload resumes the same question, selection, clock and
+ * graded feedback; every graded answer is also saved to progress.
  */
 (function () {
   'use strict';
@@ -23,6 +24,9 @@
   }
 
   var STATE_KEY = 'questiontrainer.state.v1';
+  /* The in-flight session is deliberately separate from progress: it holds the
+   * question order, cursor and per-answer reward, and dies with the tab. */
+  var SESSION_KEY = 'questiontrainer.session.v1';
   var BANK_URL = '../questions/index.json';
   /* Bare image paths are relative to the questions/ directory, not to the
    * page or to the set file, so an archived copy resolves the same way. */
@@ -34,9 +38,16 @@
   var PROGRESS_PATH = '';
   var pushBusy = false;
   var pushQueued = false;
+  /* The last browser cache write and the last disk mirror each report their
+   * own health; the notice and Settings read both. */
+  var localWriteFailed = false;
+  var diskPushFailed = false;
   var state = loadState();
   var session = null;
   var timer = null;
+  /* Home list controls survive re-renders of the page but not a reload. */
+  var homeQuery = '';
+  var homeSort = 'index';
 
   /* ------------------------------------------------------------ helpers */
   var ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -96,8 +107,10 @@
   function writeLocal() {
     try {
       localStorage.setItem(STATE_KEY, JSON.stringify(state));
+      localWriteFailed = false;
       return true;
     } catch (err) {
+      localWriteFailed = true;
       return false;
     }
   }
@@ -108,9 +121,12 @@
     if (PERSISTENCE_MODE !== 'disk' || location.protocol === 'file:') return;
     if (pushBusy) { pushQueued = true; return; }
     pushBusy = true;
+    var wasFailed = diskPushFailed;
     var body;
     try { body = JSON.stringify(state); } catch (err) {
       pushBusy = false;
+      diskPushFailed = true;
+      if (!wasFailed) renderNotice();
       return;
     }
     fetch(progressUrl(), {
@@ -122,22 +138,216 @@
       var path = response.headers.get('X-Progress-Path');
       if (path) PROGRESS_PATH = path;
       if (!response.ok) throw new Error('HTTP ' + response.status);
+      diskPushFailed = false;
     }).catch(function () {
       /* localStorage is still authoritative for this page. */
+      diskPushFailed = true;
     }).then(function () {
       pushBusy = false;
+      if (wasFailed !== diskPushFailed) renderNotice();
       if (pushQueued) { pushQueued = false; pushProgress(); }
     });
   }
 
+  /* Progress is saved in two places; either can fail on its own, so both
+   * report through the notice while the page keeps working. */
   function saveState() {
     var saved = writeLocal();
     pushProgress();
+    renderNotice();
     return saved;
   }
 
   function clearStoredState() {
     try { localStorage.removeItem(STATE_KEY); } catch (err) { /* ignore */ }
+  }
+
+  /* ------------------------------------------------------ session storage */
+  /* Unlike progress, the session snapshot is disposable: it mirrors the
+   * in-memory session so a reload can rebuild it without touching progress or
+   * replaying applyAnswer. Results carry the reward as it was at answer time,
+   * because mastery may have moved on since then. */
+  function clearStoredSession() {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch (err) { /* ignore */ }
+  }
+
+  function persistSession() {
+    if (!session) return;
+    var excluded = [];
+    Object.keys(session.excluded || {}).forEach(function (key) {
+      var index = parseInt(key, 10);
+      if (index >= 0) excluded.push(index);
+    });
+    var snapshot = {
+      v: 1,
+      cfg: {
+        setId: session.cfg.setId,
+        unitId: session.cfg.unitId || '',
+        mode: session.cfg.mode,
+        length: session.cfg.length
+      },
+      ids: session.questions.map(function (question) { return question.id; }),
+      index: session.index,
+      results: session.results.map(function (record) {
+        return {
+          index: record.index,
+          questionId: record.question.id,
+          chosen: record.chosen,
+          expected: record.expected,
+          correct: record.correct,
+          coin: record.coin,
+          pointsBefore: record.pointsBefore,
+          pointsAfter: record.pointsAfter,
+          pointsDelta: record.pointsDelta,
+          boxBefore: record.boxBefore,
+          boxAfter: record.boxAfter,
+          streak: record.streak
+        };
+      }),
+      selected: session.selected,
+      excluded: excluded,
+      checked: !!session.checked,
+      elapsed: elapsedMs()
+    };
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
+    } catch (err) {
+      /* Private mode or a full quota: the session still runs in memory. */
+    }
+  }
+
+  function finiteNumber(value) {
+    return typeof value === 'number' && isFinite(value);
+  }
+
+  /* Rebuild the session from sessionStorage. The bank is already loaded, so
+   * every id can be checked against the current set; a session whose ids no
+   * longer resolve is dropped rather than half-restored. */
+  function restoreStoredSession() {
+    var raw = null;
+    var stored = null;
+    try {
+      stored = sessionStorage.getItem(SESSION_KEY);
+      if (stored) raw = JSON.parse(stored);
+    } catch (err) { raw = null; }
+    if (stored == null) return;
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+      clearStoredSession();
+      return;
+    }
+
+    var cfg = raw.cfg;
+    var mode = cfg && cfg.mode;
+    var valid = !!cfg && typeof cfg.setId === 'string' && !!cfg.setId &&
+      (mode === 'practice' || mode === 'review' || mode === 'retry') &&
+      finiteNumber(cfg.length) && Math.floor(cfg.length) === cfg.length &&
+      cfg.length >= 1 && cfg.length <= 50 &&
+      (cfg.unitId == null || typeof cfg.unitId === 'string') &&
+      Array.isArray(raw.ids) && finiteNumber(raw.index) &&
+      Math.floor(raw.index) === raw.index && raw.index >= 0 &&
+      raw.index <= raw.ids.length &&
+      Array.isArray(raw.results) && typeof raw.checked === 'boolean' &&
+      finiteNumber(raw.elapsed) && raw.elapsed >= 0 &&
+      (raw.selected == null || (finiteNumber(raw.selected) &&
+        Math.floor(raw.selected) === raw.selected && raw.selected >= 0)) &&
+      Array.isArray(raw.excluded);
+    if (!valid) { clearStoredSession(); return; }
+
+    var unitId = cfg.unitId || '';
+    var set = C.findSet(state, SOURCE_SETS, cfg.setId);
+    if (!set) { clearStoredSession(); return; }
+    if (unitId && !C.unitOf(set, unitId)) { clearStoredSession(); return; }
+
+    var pool = C.questionsOf(set, unitId);
+    var byId = {};
+    pool.forEach(function (question) { byId[question.id] = question; });
+    var questions = [];
+    var seen = {};
+    for (var i = 0; i < raw.ids.length; i++) {
+      var id = raw.ids[i];
+      if (typeof id !== 'string' || !byId[id] || seen[id]) {
+        clearStoredSession();
+        return;
+      }
+      seen[id] = true;
+      questions.push(byId[id]);
+    }
+
+    var results = [];
+    var resultByIndex = {};
+    for (var j = 0; j < raw.results.length; j++) {
+      var rec = raw.results[j];
+      var pos = rec && rec.index;
+      if (!rec || typeof rec !== 'object' || !finiteNumber(pos) ||
+          Math.floor(pos) !== pos || pos < 0 || pos >= questions.length ||
+          questions[pos].id !== rec.questionId ||
+          typeof rec.chosen !== 'string' || typeof rec.expected !== 'string' ||
+          typeof rec.correct !== 'boolean' ||
+          (rec.coin !== 'new' && rec.coin !== 'repeat' && rec.coin !== 'miss') ||
+          !finiteNumber(rec.pointsBefore) || !finiteNumber(rec.pointsAfter) ||
+          !finiteNumber(rec.pointsDelta) || !finiteNumber(rec.boxBefore) ||
+          !finiteNumber(rec.boxAfter) || !finiteNumber(rec.streak) ||
+          resultByIndex[pos]) {
+        clearStoredSession();
+        return;
+      }
+      var record = {
+        index: pos,
+        questionId: rec.questionId,
+        question: questions[pos],
+        chosen: rec.chosen,
+        expected: rec.expected,
+        correct: rec.correct,
+        coin: rec.coin,
+        pointsBefore: rec.pointsBefore,
+        pointsAfter: rec.pointsAfter,
+        pointsDelta: rec.pointsDelta,
+        boxBefore: rec.boxBefore,
+        boxAfter: rec.boxAfter,
+        streak: rec.streak
+      };
+      results.push(record);
+      resultByIndex[pos] = record;
+    }
+    /* A checked cursor without its graded record could not paint feedback.
+     * At the results screen the cursor sits past the last question, so there
+     * is no record at its index. */
+    if (raw.checked && raw.index < questions.length && !resultByIndex[raw.index]) {
+      clearStoredSession();
+      return;
+    }
+
+    var excluded = {};
+    for (var k = 0; k < raw.excluded.length; k++) {
+      var crossed = raw.excluded[k];
+      if (!finiteNumber(crossed) || Math.floor(crossed) !== crossed || crossed < 0) {
+        clearStoredSession();
+        return;
+      }
+      excluded[crossed] = true;
+    }
+    var selected = raw.selected == null ? null : raw.selected;
+    if (selected != null && raw.index < questions.length &&
+        selected >= C.choicesFor(questions[raw.index]).length) {
+      clearStoredSession();
+      return;
+    }
+
+    session = {
+      cfg: { setId: cfg.setId, unitId: unitId, mode: mode, length: cfg.length },
+      set: set,
+      questions: questions,
+      index: raw.index,
+      results: results,
+      selected: selected,
+      excluded: excluded,
+      checked: raw.checked,
+      elapsed: raw.elapsed,
+      runningSince: null,
+      /* The first paint after a reload keeps the cursor state and skips the
+       * entrance animation. */
+      restored: true
+    };
   }
 
   /* Read the server's copy at boot. A newer (or equal) disk state wins; a 204
@@ -173,13 +383,45 @@
     } catch (err) {
       /* Plain static server or file://: keep working from localStorage. */
       PERSISTENCE_MODE = 'browser';
+      diskPushFailed = false;
     }
   }
 
   /* ------------------------------------------------------------ theming */
+  /* The top-bar button shows the current theme: half-filled circle for the
+   * automatic (system) setting, a sun for light and a moon for dark. Its label
+   * names both the current setting and what a click will switch to. */
+  function updateThemeToggle() {
+    var button = document.getElementById('theme-toggle');
+    if (!button) return;
+    var theme = state.settings.theme || 'auto';
+    var symbol = theme === 'light' ? '☀' : (theme === 'dark' ? '☾' : '◐');
+    var icon = document.getElementById('theme-toggle-icon');
+    if (icon) icon.textContent = symbol;
+    else button.textContent = symbol;
+    var label = 'Theme: ' + theme + ' — switch to ' + C.nextTheme(theme);
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+  }
+
   function applyTheme() {
     document.documentElement.setAttribute('data-theme', state.settings.theme || 'auto');
+    updateThemeToggle();
   }
+
+  /* Quick toggle: auto -> light -> dark -> auto. The Settings select goes
+   * through applyTheme too, so both controls always agree. */
+  (function () {
+    var button = document.getElementById('theme-toggle');
+    if (!button) return;
+    button.addEventListener('click', function () {
+      state.settings.theme = C.nextTheme(state.settings.theme || 'auto');
+      applyTheme();
+      var select = document.getElementById('theme');
+      if (select) select.value = state.settings.theme;
+      saveState();
+    });
+  })();
 
   /* ------------------------------------------------------ feedback effects */
   /* A correct answer is rewarded on three channels that agree with each other:
@@ -309,8 +551,11 @@
   }
 
   /* The header repeats the live mastery total, so it animates the same way as
-   * the reward line and changes colour for the direction of the answer. */
-  function updatePracticeStatus(result, streak) {
+   * the reward line and changes colour for the direction of the answer. A
+   * restored answer passes animate=false: it shows the recorded totals at
+   * once instead of replaying the count-up. */
+  function updatePracticeStatus(result, streak, animate) {
+    var animated = animate !== false;
     var view = document.getElementById('practice-view');
     if (view) {
       view.setAttribute('data-mood',
@@ -319,12 +564,18 @@
     var chip = document.getElementById('mastery-pill');
     if (chip) {
       chip.classList.remove('is-up', 'is-down');
-      void chip.offsetWidth;
-      if (result.pointsDelta > 0) chip.classList.add('is-up');
-      else if (result.pointsDelta < 0) chip.classList.add('is-down');
+      if (animated) {
+        void chip.offsetWidth;
+        if (result.pointsDelta > 0) chip.classList.add('is-up');
+        else if (result.pointsDelta < 0) chip.classList.add('is-down');
+      }
     }
-    countUp(document.getElementById('mastery-pill-value'),
-      result.pointsBefore, result.pointsAfter, '%');
+    var masteryValue = document.getElementById('mastery-pill-value');
+    if (animated) {
+      countUp(masteryValue, result.pointsBefore, result.pointsAfter, '%');
+    } else if (masteryValue) {
+      masteryValue.textContent = result.pointsAfter + '%';
+    }
     var run = document.getElementById('streak-chip');
     if (!run) return;
     if (streak >= 2) {
@@ -332,9 +583,11 @@
       if (value) value.textContent = streak;
       run.hidden = false;
       run.classList.toggle('hot', streak >= 5);
-      run.classList.remove('pop');
-      void run.offsetWidth;
-      run.classList.add('pop');
+      if (animated) {
+        run.classList.remove('pop');
+        void run.offsetWidth;
+        run.classList.add('pop');
+      }
     } else {
       run.hidden = true;
     }
@@ -507,11 +760,24 @@
   }
 
   function noticeHTML() {
-    if (!LOAD_ERRORS.length) return '';
-    return '<div class="warnbox"><b>Question data problems</b><ul>' +
-      LOAD_ERRORS.map(function (error) { return '<li>' + esc(error) + '</li>'; }).join('') +
-      '</ul><p class="small">Edit <code>questions/index.json</code> and the files it lists. ' +
-      '<a href="#/format">See the format</a>.</p></div>';
+    var html = '';
+    if (LOAD_ERRORS.length) {
+      html += '<div class="warnbox"><b>Question data problems</b><ul>' +
+        LOAD_ERRORS.map(function (error) { return '<li>' + esc(error) + '</li>'; }).join('') +
+        '</ul><p class="small">Edit <code>questions/index.json</code> and the files it lists. ' +
+        '<a href="#/format">See the format</a>.</p></div>';
+    }
+    if (localWriteFailed) {
+      html += '<div class="warnbox"><b>Progress could not be saved in this browser</b>' +
+        '<p>Browser storage is full or blocked, so answers may be lost on reload. ' +
+        'Export your progress from <a href="#/settings">Settings</a>, then free up storage.</p></div>';
+    }
+    if (PERSISTENCE_MODE === 'disk' && diskPushFailed) {
+      html += '<div class="warnbox"><b>Disk mirror failed</b>' +
+        '<p>Progress is saved in this browser only; the server mirror did not accept ' +
+        'the last write.</p></div>';
+    }
+    return html;
   }
 
   function renderNotice() {
@@ -593,6 +859,9 @@
     }
     stopTimer();
     paintTimer();
+    /* Pausing is a natural save point: it also covers a reload while the tab
+     * is hidden or the session is being left. */
+    if (session) persistSession();
   }
 
   /* Answering time stops while the tab is hidden. On return it resumes only
@@ -606,6 +875,12 @@
         session.index < session.questions.length && !session.checked) {
       resumeTimer();
     }
+  });
+
+  /* A reload or a closed tab does not fire visibilitychange in every browser;
+   * pagehide is the reliable last chance to bank the answering time. */
+  window.addEventListener('pagehide', function () {
+    pauseTimer();
   });
 
   /* ------------------------------------------------------------ routing */
@@ -626,9 +901,10 @@
     renderPills();
 
     /* Leaving practice abandons the finished session so the same link starts
-     * a fresh one next time. */
+     * a fresh one next time. Its sessionStorage copy goes with it. */
     if (route.path !== '/practice' && session && session.index >= session.questions.length) {
       session = null;
+      clearStoredSession();
     }
 
     if (route.path === '/archive') renderArchive();
@@ -703,13 +979,13 @@
       '</article>';
   }
 
-  function bindArchiveButtons() {
-    $$('[data-archive]', appEl).forEach(function (button) {
+  function bindArchiveButtons(root) {
+    $$('[data-archive]', root || appEl).forEach(function (button) {
       button.addEventListener('click', function () {
         archiveSet(button.getAttribute('data-archive'));
       });
     });
-    $$('[data-archive-unit]', appEl).forEach(function (button) {
+    $$('[data-archive-unit]', root || appEl).forEach(function (button) {
       button.addEventListener('click', function () {
         archiveUnit(button.getAttribute('data-set'), button.getAttribute('data-archive-unit'));
       });
@@ -748,6 +1024,57 @@
     render();
   }
 
+  /* Paint only the set list, its count and the no-match state from the rows
+   * the controls filter. The search input itself is never replaced, so it
+   * keeps focus and the caret while typing. */
+  function renderSetRows(activeRows) {
+    var list = document.getElementById('set-rows');
+    if (!list) return;
+    var rows = C.sortSetRows(C.filterSetRows(activeRows, homeQuery), homeSort);
+    list.innerHTML = rows.map(setCard).join('');
+
+    var count = document.getElementById('set-list-count');
+    if (count) {
+      var unitCount = rows.reduce(function (n, row) { return n + row.units; }, 0);
+      var heading = homeQuery
+        ? rows.length + ' of ' + plural(activeRows.length, 'set') + ' shown'
+        : (unitCount !== rows.length
+          ? plural(rows.length, 'set') + ' · ' + plural(unitCount, 'unit')
+          : plural(rows.length, 'set'));
+      count.textContent = ' · ' + heading;
+    }
+
+    var empty = document.getElementById('set-empty');
+    if (empty) {
+      empty.hidden = rows.length > 0;
+      empty.innerHTML = rows.length ? '' :
+        '<p>No sets match “' + esc(homeQuery) + '”.</p>' +
+        '<button type="button" class="btn btn-sm" id="clear-filter">Clear</button>';
+      var clear = document.getElementById('clear-filter');
+      if (clear) clear.addEventListener('click', function () {
+        homeQuery = '';
+        var input = document.getElementById('set-filter');
+        if (input) { input.value = ''; input.focus(); }
+        renderSetRows(activeRows);
+      });
+    }
+
+    bindArchiveButtons(list);
+  }
+
+  function bindHomeControls(activeRows) {
+    var input = document.getElementById('set-filter');
+    if (input) input.addEventListener('input', function (event) {
+      homeQuery = event.target.value;
+      renderSetRows(activeRows);
+    });
+    var select = document.getElementById('set-sort');
+    if (select) select.addEventListener('change', function (event) {
+      homeSort = event.target.value;
+      renderSetRows(activeRows);
+    });
+  }
+
   function renderHome() {
     var active = C.activeSets(state, SOURCE_SETS);
     var archived = C.archivedSets(state);
@@ -755,7 +1082,6 @@
     var stats = C.overallStats(state, all);
     var due = activeDue();
     var rows = active.map(function (set) { return C.setStats(state, set, Date.now()); });
-    var unitCount = rows.reduce(function (n, row) { return n + row.units; }, 0);
 
     var html = '<div class="hero">' +
       '<div class="card"><h1>Question Trainer</h1>' +
@@ -773,11 +1099,29 @@
       '</div></div></div>';
 
     if (rows.length) {
-      var heading = unitCount !== rows.length
-        ? plural(rows.length, 'set') + ' · ' + plural(unitCount, 'unit')
-        : plural(rows.length, 'set');
-      html += '<section class="set-list"><h2>Question sets · ' + heading +
-        '</h2><div class="sets">' + rows.map(setCard).join('') + '</div></section>';
+      var sorts = [
+        { value: 'index', label: 'Index order' },
+        { value: 'title', label: 'Title A–Z' },
+        { value: 'mastery', label: 'Mastery' },
+        { value: 'due', label: 'Most due' }
+      ];
+      html += '<section class="set-list">' +
+        '<h2>Question sets<span id="set-list-count"></span></h2>' +
+        '<div class="set-tools">' +
+          '<label class="set-search"><span class="sr-only">Filter sets</span>' +
+            '<input type="search" id="set-filter" placeholder="Filter sets" value="' +
+              esc(homeQuery) + '" autocomplete="off" spellcheck="false"></label>' +
+          '<label class="set-sort">Sort sets <select id="set-sort">' +
+            sorts.map(function (option) {
+              return '<option value="' + option.value + '"' +
+                (homeSort === option.value ? ' selected' : '') + '>' +
+                option.label + '</option>';
+            }).join('') +
+          '</select></label>' +
+        '</div>' +
+        '<div class="sets" id="set-rows"></div>' +
+        '<div class="set-empty" id="set-empty" hidden></div>' +
+        '</section>';
     } else {
       html += '<div class="card"><h2>' +
         (archived.length ? 'All sets are archived' : 'No question sets loaded') + '</h2>' +
@@ -790,7 +1134,10 @@
     }
 
     appEl.innerHTML = html;
-    bindArchiveButtons();
+    if (rows.length) {
+      renderSetRows(rows);
+      bindHomeControls(rows);
+    }
   }
 
   /* ------------------------------------------------------------ archive */
@@ -943,6 +1290,7 @@
       state.totals.sessions += 1;
       saveState();
     }
+    persistSession();
     return session;
   }
 
@@ -1045,7 +1393,7 @@
         '<div class="card" id="qcard"></div>' +
       '</div>';
 
-    showQuestion(session.index);
+    showQuestion(session.index, session.restored);
   }
 
   function resultAt(index) {
@@ -1100,11 +1448,13 @@
       elimHTML(index, letter) + '</div>';
   }
 
-  function showQuestion(index) {
+  function showQuestion(index, keepState) {
     var question = session.questions[index];
-    session.selected = null;
-    session.checked = false;
-    session.excluded = {};
+    if (!keepState) {
+      session.selected = null;
+      session.checked = false;
+      session.excluded = {};
+    }
     /* A fast key sequence can reach the next question while the last burst is
      * still in the air; drop those layers so sparks never trail onto a fresh
      * question. */
@@ -1136,12 +1486,15 @@
           'Check answer</button>' +
         '<span class="kbdhint"><kbd>A</kbd>–<kbd>Z</kbd> choose · ' +
           '<kbd>1</kbd>–<kbd>9</kbd> choose · <kbd>Enter</kbd> check / next</span>' +
+        '<button type="button" class="shortcut-help" id="shortcut-help"' +
+          ' aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>' +
       '</div>' +
       '<div id="feedback" aria-live="polite"></div>';
 
     /* A fresh question slides in and its choices cascade; the stage halo
-     * returns to neutral until this question is graded. */
-    card.classList.add('q-enter');
+     * returns to neutral until this question is graded. A restored question
+     * is not new, so it appears as it was left. */
+    if (!keepState) card.classList.add('q-enter');
     var view = document.getElementById('practice-view');
     if (view) view.removeAttribute('data-mood');
 
@@ -1156,6 +1509,27 @@
       });
     });
     document.getElementById('action').addEventListener('click', action);
+    var shortcutHelp = document.getElementById('shortcut-help');
+    if (shortcutHelp) {
+      shortcutHelp.addEventListener('click', function () {
+        openShortcuts(shortcutHelp);
+      });
+    }
+
+    if (session.checked) {
+      var record = resultAt(index);
+      if (record) {
+        renderGraded(record, false);
+        /* The clock stays frozen at the answering time. */
+        paintTimer();
+        return;
+      }
+      /* Defensive: a checked cursor with no record cannot show feedback. */
+      session.checked = false;
+      session.selected = null;
+      session.excluded = {};
+    }
+    syncChoices();
     resumeTimer();
   }
 
@@ -1184,6 +1558,7 @@
     if (session.checked || session.excluded[index]) return;
     session.selected = index;
     syncChoices();
+    persistSession();
   }
 
   /* Crossing out is a note to self, so a choice can never be both chosen and
@@ -1196,6 +1571,7 @@
       if (session.selected === index) session.selected = null;
     }
     syncChoices();
+    persistSession();
   }
 
   function action() {
@@ -1295,24 +1671,12 @@
     return html;
   }
 
-  function checkAnswer() {
-    if (session.checked || session.selected == null) return;
-    var question = session.questions[session.index];
-    var result = C.applyAnswer(state, session.set.id, question, session.selected, Date.now());
-    session.checked = true;
-    pauseTimer();
-
-    var record = {
-      index: session.index,
-      question: question,
-      chosen: result.chosen,
-      correct: result.correct,
-      expected: result.expected,
-      pointsDelta: result.pointsDelta
-    };
-    session.results.push(record);
-    saveState();
-    renderPills();
+  /* Paint the graded question: rows, per-choice notes, action label and the
+   * feedback card. A live answer animates the reward; a restored one passes
+   * animate=false so nothing is replayed and progress is never touched. */
+  function renderGraded(record, animate) {
+    var question = record.question;
+    var streak = record.streak;
 
     syncChoices();
     $$('#choices .choice-item').forEach(function (item, i) {
@@ -1326,41 +1690,32 @@
     actionBtn.textContent = last ? 'See results' : 'Next question';
     actionBtn.disabled = false;
 
-    /* The reward line: the mastery delta with the new total counting up, the
-     * streak once there is one to show, and when the item comes back. */
-    var streak = (state.sets[session.set.id] || {}).streak || 0;
-    /* core's answer result carries what the answer was worth, not the running
-     * streak (that lives on the set record), so the reward reads both here and
-     * the effects scale from one object instead of from two sources. */
-    var reward = {
-      correct: result.correct,
-      coin: result.coin,
-      streak: streak,
-      pointsAfter: result.pointsAfter
-    };
-    var signed = (result.pointsDelta > 0 ? '+' : '') + result.pointsDelta;
-    var masteryClass = result.pointsDelta > 0 ? 'up' : (result.pointsDelta < 0 ? 'down' : 'flat');
+    /* The reward line: the mastery delta with the new total, the streak once
+     * there is one to show, and when the item comes back. */
+    var signed = (record.pointsDelta > 0 ? '+' : '') + record.pointsDelta;
+    var masteryClass = record.pointsDelta > 0 ? 'up'
+      : (record.pointsDelta < 0 ? 'down' : 'flat');
     var mastery = '<span class="mastery-delta ' + masteryClass + '">' + signed + '</span>' +
       ' <span class="muted">mastery · <b class="mastery-now" id="mastery-now">' +
-        result.pointsAfter + '%</b></span>';
+        record.pointsAfter + '%</b></span>';
 
-    var gapDays = C.SRS_INTERVALS_DAYS[result.boxAfter];
+    var gapDays = C.SRS_INTERVALS_DAYS[record.boxAfter];
     var when = gapDays === 0
       ? 'back in the next review session'
       : 'next review in ' + plural(gapDays, 'day');
 
-    var streakBadge = (result.correct && streak >= 2)
+    var streakBadge = (record.correct && streak >= 2)
       ? ' <span class="streak-badge' + (streak >= 5 ? ' hot' : '') + '">🔥 ' +
         streak + ' in a row</span>'
       : '';
 
     document.getElementById('feedback').innerHTML =
-      '<div class="feedback ' + (result.correct ? 'correct' : 'incorrect') + '">' +
-        '<div class="verdict"><span class="icon">' + (result.correct ? '✓' : '✗') + '</span>' +
-          (result.correct
-            ? 'Correct' + (result.coin === 'repeat' ? ' (already answered right before)' : '')
-            : 'Not quite — the answer is ' + result.expected +
-              (result.chosen !== result.expected ? ' (you chose ' + result.chosen + ')' : '')) +
+      '<div class="feedback ' + (record.correct ? 'correct' : 'incorrect') + '">' +
+        '<div class="verdict"><span class="icon">' + (record.correct ? '✓' : '✗') + '</span>' +
+          (record.correct
+            ? 'Correct' + (record.coin === 'repeat' ? ' (already answered right before)' : '')
+            : 'Not quite — the answer is ' + record.expected +
+              (record.chosen !== record.expected ? ' (you chose ' + record.chosen + ')' : '')) +
           streakBadge +
         '</div>' +
         explanationHTML(question) +
@@ -1368,16 +1723,57 @@
           '<span class="review-chip">↻ ' + when + '</span>' +
         '</div>' +
       '</div>';
-    updatePracticeStatus(result, streak);
+    updatePracticeStatus(record, streak, animate);
     renderDots();
-    celebrate(reward, result.pointsBefore);
+    /* core's answer result carries what the answer was worth; the streak lives
+     * on the set record and was copied into the result at answer time. */
+    if (animate) {
+      celebrate({
+        correct: record.correct,
+        coin: record.coin,
+        streak: streak,
+        pointsAfter: record.pointsAfter
+      }, record.pointsBefore);
+    }
+  }
+
+  function checkAnswer() {
+    if (session.checked || session.selected == null) return;
+    var question = session.questions[session.index];
+    var result = C.applyAnswer(state, session.set.id, question, session.selected, Date.now());
+    session.checked = true;
+    var record = {
+      index: session.index,
+      questionId: question.id,
+      question: question,
+      chosen: result.chosen,
+      correct: result.correct,
+      expected: result.expected,
+      pointsDelta: result.pointsDelta,
+      coin: result.coin,
+      pointsBefore: result.pointsBefore,
+      pointsAfter: result.pointsAfter,
+      boxBefore: result.boxBefore,
+      boxAfter: result.boxAfter,
+      streak: (state.sets[session.set.id] || {}).streak || 0
+    };
+    session.results.push(record);
+    /* pauseTimer() both records the answering time and saves the session. */
+    pauseTimer();
+    saveState();
+    renderPills();
+    renderGraded(record, true);
   }
 
   function nextQuestion() {
     if (!session.checked) return;
     session.index += 1;
-    if (session.index >= session.questions.length) renderResults();
-    else showQuestion(session.index);
+    if (session.index >= session.questions.length) {
+      renderResults();
+    } else {
+      showQuestion(session.index);
+      persistSession();
+    }
     window.scrollTo(0, 0);
   }
 
@@ -1451,8 +1847,15 @@
     var again = document.getElementById('again');
     if (again) {
       again.addEventListener('click', function () {
+        /* Start from the clean practice URL: the results may belong to a retry
+         * run, whose mode and question count must not leak into the new one. */
+        var setId = session.set.id;
+        var unitId = session.cfg.unitId || '';
+        var target = practiceHref(setId, unitId, null);
         session = null;
-        render();
+        clearStoredSession();
+        if (location.hash === target) render();
+        else location.hash = target;
       });
     }
 
@@ -1464,10 +1867,13 @@
         var questions = missed.map(function (r) { return r.question; });
         createSession({ setId: setId, unitId: unitId, mode: 'retry', length: questions.length },
           questions);
-        location.hash = '#/practice?set=' + encodeURIComponent(setId) +
+        var target = '#/practice?set=' + encodeURIComponent(setId) +
           (unitId ? '&unit=' + encodeURIComponent(unitId) : '') +
           '&mode=retry&n=' + questions.length;
-        render();
+        /* The hashchange handler renders the retry session; render directly
+         * only when the URL is already the same and no event would fire. */
+        if (location.hash === target) render();
+        else location.hash = target;
       });
     }
   }
@@ -1560,14 +1966,25 @@
 
   /* ------------------------------------------------------------ settings */
   function persistenceHTML() {
-    if (PERSISTENCE_MODE === 'disk') {
-      return '<p class="small muted">Saved to disk at <code>' +
-        esc(PROGRESS_PATH || 'progress/progress.json') + '</code> and cached in this browser.' +
-        '</p>';
+    var html = '';
+    if (localWriteFailed) {
+      html += '<p class="small warnline">Browser storage is full or blocked, so answers ' +
+        'may be lost on reload. Export your progress now, then free up storage.</p>';
     }
-    return '<p class="small muted">Browser-only: this page cannot reach the progress API. ' +
+    if (PERSISTENCE_MODE === 'disk') {
+      html += diskPushFailed
+        ? '<p class="small muted">Saved in this browser only; the server mirror at <code>' +
+          esc(PROGRESS_PATH || 'progress/progress.json') +
+          '</code> did not accept the last write.</p>'
+        : '<p class="small muted">Saved to disk at <code>' +
+          esc(PROGRESS_PATH || 'progress/progress.json') +
+          '</code> and cached in this browser.</p>';
+      return html;
+    }
+    html += '<p class="small muted">Browser-only: this page cannot reach the progress API. ' +
       'Start the trainer with <code>./qt</code> (or <code>python3 serve.py</code>) to save ' +
       'progress to disk.</p>';
+    return html;
   }
 
   function renderSettings(route) {
@@ -1684,6 +2101,7 @@
       clearStoredState();
       state = C.emptyState(Date.now());
       session = null;
+      clearStoredSession();
       saveState();
       applyTheme();
       renderPills();
@@ -1800,6 +2218,54 @@
       'no longer lists it.</p></div>';
   }
 
+  /* ------------------------------------------------------------ shortcuts */
+  var shortcutsOpener = null;
+
+  function openShortcuts(opener) {
+    var dialog = document.getElementById('shortcuts');
+    if (!dialog || typeof dialog.showModal !== 'function' || dialog.open) return;
+    shortcutsOpener = opener || document.activeElement;
+    dialog.showModal();
+    var close = document.getElementById('shortcuts-close');
+    if (close) close.focus();
+    else dialog.focus();
+  }
+
+  (function () {
+    var dialog = document.getElementById('shortcuts');
+    if (!dialog) return;
+    dialog.addEventListener('click', function (event) {
+      /* A click on the backdrop reports the dialog itself as the target. */
+      if (event.target === dialog) dialog.close();
+    });
+    /* Covers the Close button and Esc alike; focus returns to what opened it. */
+    dialog.addEventListener('close', function () {
+      var opener = shortcutsOpener;
+      shortcutsOpener = null;
+      if (opener && opener !== document.body && opener !== document.documentElement &&
+          typeof opener.focus === 'function' && document.contains(opener)) {
+        opener.focus();
+        return;
+      }
+      var main = document.getElementById('main');
+      if (main) main.focus();
+    });
+  })();
+
+  /* `?` opens the help from any route, but never while typing or editing. The
+   * practice key handler ignores it, so it cannot choose a letter as well. */
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== '?' || event.ctrlKey || event.metaKey || event.altKey) return;
+    var target = event.target || {};
+    var tag = (target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' ||
+        target.isContentEditable) return;
+    var dialog = document.getElementById('shortcuts');
+    if (dialog && dialog.open) return;
+    event.preventDefault();
+    openShortcuts(document.activeElement);
+  });
+
   /* ------------------------------------------------------------ keyboard */
   document.addEventListener('keydown', function (event) {
     if (parseHash().path !== '/practice' || !session ||
@@ -1842,6 +2308,7 @@
     appEl.innerHTML = '<div class="card"><p class="muted">Loading question sets…</p></div>';
     await loadBank();
     await initProgress();
+    restoreStoredSession();
     window.addEventListener('hashchange', render);
     render();
   }

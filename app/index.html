@@ -24,6 +24,10 @@
       <a href="#/settings" data-route="/settings">Settings</a>
       <a href="#/format" data-route="/format">Format</a>
     </nav>
+    <button type="button" class="theme-toggle" id="theme-toggle"
+      aria-label="Theme: auto — switch to light" title="Theme: auto — switch to light">
+      <span id="theme-toggle-icon" aria-hidden="true">◐</span>
+    </button>
     <div class="pills" id="pills"></div>
   </div>
 </header>
@@ -36,6 +40,30 @@
   live in this browser and, when served with <code>./qt</code>, are mirrored to disk.
   <a href="#/format">JSON format</a>.</p>
 </footer>
+
+<dialog id="shortcuts" class="shortcuts" aria-labelledby="shortcuts-title">
+  <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+  <table class="shortcut-list">
+    <tbody>
+      <tr><th scope="row"><kbd>A</kbd>–<kbd>Z</kbd> or <kbd>1</kbd>–<kbd>9</kbd></th>
+        <td>Choose a choice</td></tr>
+      <tr><th scope="row"><kbd>Enter</kbd></th>
+        <td>Check the answer, then move to the next question</td></tr>
+      <tr><th scope="row"><kbd>Space</kbd></th>
+        <td>Select a focused choice; activates a focused button</td></tr>
+      <tr><th scope="row"><kbd>?</kbd></th>
+        <td>Open this help</td></tr>
+      <tr><th scope="row"><kbd>Esc</kbd></th>
+        <td>Close this help</td></tr>
+      <tr><th scope="row">Mouse</th>
+        <td>Use the ✕ button on a choice to cross it out, and click it again to undo</td></tr>
+    </tbody>
+  </table>
+  <form method="dialog" class="shortcuts-actions">
+    <button type="submit" class="btn btn-sm" id="shortcuts-close">Close</button>
+  </form>
+</dialog>
+
 <script src="core.js"></script>
 <script src="app.js"></script>
 </body>

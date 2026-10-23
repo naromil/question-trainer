@@ -21,6 +21,14 @@ From the repository root:
 written to `progress/progress.json` (git-ignored) as well as to `localStorage`,
 so it survives a browser-data wipe and a server restart.
 
+On each overwrite the previous state is kept beside the main file as
+`<progress>.bak` (by default `progress/progress.json.bak`); the very first
+write creates no backup.
+`GET /api/progress` normally serves the primary file, but when that file is
+missing or invalid it serves a valid backup and marks the response with
+`X-Progress-Source: backup`. A corrupt primary with no valid backup answers
+`500` rather than returning a state the server cannot trust.
+
 ```bash
 ./qt --port 9000 --no-open          # another port; do not open a browser
 ./qt --host 0.0.0.0                 # listen on all interfaces
@@ -30,6 +38,12 @@ so it survives a browser-data wipe and a server restart.
 `--progress` may be absolute, or relative to the repository root; the default is
 `progress/progress.json`. `--host` defaults to `127.0.0.1` and `--port` to
 `8765`. `python3 serve.py` accepts the same flags.
+
+The server sends `/` and `/app` to `/app/`. Hidden files and the progress file
+(including its `.bak`) are never served, and a directory without an
+`index.html` answers `404` instead of listing its contents. Every response
+carries a strict `Content-Security-Policy` plus `X-Frame-Options: DENY`,
+`Referrer-Policy: no-referrer` and a restrictive `Permissions-Policy`.
 
 The server exits by itself after five minutes without requests; only incoming
 requests reset that clock, so an idle browser tab does not keep it alive.
@@ -53,12 +67,12 @@ origins.
 
 | Screen | What you get |
 |---|---|
-| **Sets** (home) | One long card per active question set: mastery bar, tier, answered count, first-try accuracy, due count, and **Practice**, **Review**, **Archive** for the set. A set with several units also lists them on the right of its card, each unit with its own **Practice**, **Review** and **Archive**. There is no mixed practice. |
-| **Session** | One set, or one unit of it. One question at a time with a progress rail, live mastery and streak chips, and an answering-time clock that pauses while you read feedback and while the tab is hidden. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Every question also offers a final **I don't know** choice, which is always graded wrong. Choices can be crossed out (and un-crossed) before answering. The question and its choices glide in; selecting a choice pops its letter, and grading marks the right row with a tick and a wrong pick with a cross. A right answer pays off on several channels at once — the stage glows green (amber while a streak runs), the card pulses, sparks burst from the tick, and both mastery totals count up — with a chord that lands an octave higher for a first-time correct and gains a note every few of a run. A miss tints the stage red, shakes the card and plays a low two-tone. Sound follows the setting; animation follows `prefers-reduced-motion`. |
-| **Results** | An animated score ring, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions** (inside the same unit when the session was unit-scoped). A strong score adds confetti and a rising chord. |
+| **Sets** (home) | One long card per active question set: mastery bar, tier, answered count, first-try accuracy, due count, and **Practice**, **Review**, **Archive** for the set. A set with several units also lists them on the right of its card, each unit with its own **Practice**, **Review** and **Archive**. There is no mixed practice. Above the list, a **Filter sets** search box matches set titles, descriptions, and unit titles case-insensitively, and a **Sort sets** control orders by Index order, Title A–Z, Mastery, or Most due. |
+| **Session** | One set, or one unit of it. An unfinished session survives a page reload — the same question, selection, cross-outs, answering clock and graded feedback — via `sessionStorage`, and restored feedback is never re-graded or counted twice. One question at a time with a progress rail, live mastery and streak chips, and an answering-time clock that pauses while you read feedback and while the tab is hidden. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Every question also offers a final **I don't know** choice, which is always graded wrong. Choices can be crossed out (and un-crossed) before answering. The question and its choices glide in; selecting a choice pops its letter, and grading marks the right row with a tick and a wrong pick with a cross. A right answer pays off on several channels at once — the stage glows green (amber while a streak runs), the card pulses, sparks burst from the tick, and both mastery totals count up — with a chord that lands an octave higher for a first-time correct and gains a note every few of a run. A miss tints the stage red, shakes the card and plays a low two-tone. Sound follows the setting; animation follows `prefers-reduced-motion`. Press <kbd>?</kbd> for the Keyboard shortcuts dialog: <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd> choose, <kbd>Enter</kbd> check/next, <kbd>Space</kbd> activate, <kbd>?</kbd> help, <kbd>Esc</kbd> close, and the mouse cross-out; Close or <kbd>Esc</kbd> dismisses it. |
+| **Results** | An animated score ring, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions** (inside the same unit when the session was unit-scoped). A strong score adds confetti and a rising chord. **Practice again** starts a clean practice run for the same set or unit, dropping any retry mode or count from the URL. |
 | **Archive** | Sets and single units you archived, with their progress and a saved copy of their questions. **Restore** puts a set or unit back on the active list. If the source is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
 | **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count for active sets, a 14-day activity chart, a per-set table with a **Reset** action, and repeated trouble spots. |
-| **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. |
+| **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. A theme quick-toggle in the top bar cycles auto/light/dark and stays in sync with the Settings theme select. If a browser or disk write fails, a banner names the copy at risk and the **Progress data** section repeats it; the page keeps working. |
 | **Format** | The in-app schema summary with an example; the full reference is [questions/README.md](questions/README.md). |
 
 ### Mastery
@@ -129,6 +143,7 @@ questions/README.md     complete question-data format reference
 serve.py                stdlib static server + disk progress API
 qt                      one-command launcher for serve.py
 tools/test_core.js      node --test suite for core.js and the sample data
+tools/test_server.py    stdlib unittest suite for serve.py
 LICENSE                 MIT licence
 ```
 
@@ -139,7 +154,12 @@ LICENSE                 MIT licence
 
 ```bash
 node --test tools/test_core.js
+python3 tools/test_server.py              # serve.py: routing, headers, backups
+python3 -m unittest tools/test_server.py  # the same server suite via unittest
 ```
+
+The server suite starts `serve.py` on an ephemeral port and checks routing,
+security headers, and progress backup/recovery.
 
 ## Copyright
 

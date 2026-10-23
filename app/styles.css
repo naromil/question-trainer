@@ -98,6 +98,10 @@ kbd {
 
 .skip { position: absolute; left: -9999px; }
 .skip:focus { left: 8px; top: 8px; z-index: 50; background: var(--card); padding: .5em .8em; border-radius: 6px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 /* ---------------------------------------------------------------- top bar */
 .topbar {
@@ -122,6 +126,16 @@ kbd {
 }
 .nav a:hover { background: var(--card-2); text-decoration: none; }
 .nav a[aria-current="page"] { color: var(--blue); background: var(--blue-soft); font-weight: 600; }
+/* Fixed size and line-height, so swapping the glyph never moves the top bar. */
+.theme-toggle {
+  flex: none; width: 2rem; height: 2rem; padding: 0;
+  display: inline-grid; place-items: center;
+  font: inherit; font-size: 1rem; line-height: 1;
+  color: var(--ink-2); background: var(--card-2);
+  border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+}
+.theme-toggle:hover { color: var(--ink); border-color: var(--ink-3); background: var(--card); }
+.theme-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .pills { display: flex; gap: .4rem; }
 .pill {
   background: var(--card-2); border: 1px solid var(--line); border-radius: 999px;
@@ -198,6 +212,29 @@ kbd {
   color: var(--ink-3); font-size: .78rem; letter-spacing: .1em; text-transform: uppercase;
   margin-bottom: .55rem;
 }
+/* Search and sort sit above the list. The search field grows and the sort
+   stays compact, so both fit one row until the screen gets narrow. */
+.set-tools { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; margin-bottom: .75rem; }
+.set-search { flex: 1 1 240px; min-width: 0; }
+.set-search input {
+  width: 100%; font: inherit; font-size: .9rem; padding: .42rem .7rem;
+  border: 1px solid var(--line-2); border-radius: 8px;
+  background: var(--card); color: var(--ink);
+}
+.set-search input::placeholder { color: var(--ink-3); }
+.set-search input:focus-visible {
+  outline: 2px solid var(--blue); outline-offset: 1px; border-color: var(--blue);
+}
+.set-sort {
+  display: flex; align-items: center; gap: .4rem;
+  font-size: .85rem; color: var(--ink-3);
+}
+.set-sort select { font-size: .85rem; }
+.set-empty {
+  text-align: center; padding: 1.4rem 1rem; color: var(--ink-3);
+  border: 1px dashed var(--line-2); border-radius: var(--radius);
+}
+.set-empty p { margin-bottom: .7rem; }
 /* Set cards are long rows, one set per line, not square tiles. A set made of
    several units adds a units panel on the right of the same card. */
 .sets { display: flex; flex-direction: column; gap: .75rem; }
@@ -609,6 +646,8 @@ summary { cursor: pointer; color: var(--blue); font-size: .88rem; }
 .warnbox ul { margin: .35rem 0 .4rem; padding-left: 1.1rem; }
 .warnbox li { margin-bottom: .2rem; }
 .warnbox p:last-child { margin-bottom: 0; }
+.warnbox a { color: inherit; text-decoration: underline; }
+.warnline { color: var(--amber); font-weight: 600; }
 
 pre.code {
   margin: 0 0 .9rem; padding: .8rem .9rem; overflow-x: auto;
@@ -624,6 +663,15 @@ pre.code {
 }
 .actions { display: flex; gap: .6rem; align-items: center; margin-top: 1rem; }
 .kbdhint { color: var(--ink-3); font-size: .78rem; margin-left: auto; text-align: right; }
+.shortcut-help {
+  flex: none; width: 1.7rem; height: 1.7rem; padding: 0;
+  display: inline-grid; place-items: center;
+  font: inherit; font-size: .85rem; font-weight: 700; line-height: 1;
+  color: var(--ink-2); background: var(--card-2);
+  border: 1px solid var(--line-2); border-radius: 999px; cursor: pointer;
+}
+.shortcut-help:hover { color: var(--ink); border-color: var(--ink-3); background: var(--card); }
+.shortcut-help:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 /* ---------------------------------------------------------------- tables */
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
@@ -685,6 +733,29 @@ table .bar { width: 110px; }
 .review-item { border-top: 1px solid var(--line); padding-top: .9rem; margin-top: .9rem; }
 .review-item:first-child { border-top: none; margin-top: 0; padding-top: 0; }
 
+/* ---------------------------------------------------------------- dialog */
+dialog.shortcuts {
+  width: 100%; max-width: 30rem; max-height: calc(100vh - 2rem);
+  padding: 1.15rem 1.25rem 1rem; overflow: auto;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); color: var(--ink); box-shadow: var(--shadow);
+}
+dialog.shortcuts::backdrop { background: rgba(10, 14, 20, .5); }
+dialog.shortcuts h2 { margin-bottom: .75rem; }
+.shortcut-list { font-size: .88rem; }
+.shortcut-list th, .shortcut-list td {
+  padding: .4rem .25rem; border-bottom: 1px solid var(--line);
+  font-size: .86rem; vertical-align: top;
+}
+.shortcut-list th {
+  width: 42%; text-transform: none; letter-spacing: 0;
+  color: var(--ink); font-weight: 500;
+}
+.shortcut-list td { color: var(--ink-2); }
+.shortcut-list tr:last-child th, .shortcut-list tr:last-child td { border-bottom: none; }
+.shortcuts-actions { display: flex; justify-content: flex-end; margin-top: .85rem; }
+dialog.shortcuts button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
 label.field { display: flex; align-items: center; gap: .55rem; padding: .4rem 0; }
 label.field input { width: 1.05rem; height: 1.05rem; accent-color: var(--blue); }
 select, input[type="number"] {
@@ -708,6 +779,7 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .wrap { padding: 1rem .7rem 2.5rem; }
   .card { padding: .9rem; }
   .kbdhint { display: none; }
+  .shortcut-help { margin-left: auto; }
   .elim { width: 2rem; height: 2rem; margin-right: .4rem; }
   .prac-head { gap: .45rem; }
   .prac-tools { margin-left: 0; }
