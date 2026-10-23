@@ -27,15 +27,28 @@
   /* ------------------------------------------------------------------ *
    * Mastery
    *
-   * Per set the trainer keeps a point total in [0, 100]. A question answered
-   * correctly for the first time is worth the most; repeats are worth less
-   * (you already knew it); a miss costs points, so mastery decays if a set
-   * goes rusty.
+   * A set's mastery is the average of every question's own share, so the
+   * score does not depend on how many questions the set holds: a set is
+   * mastered when most of *its* questions are known, not after a fixed
+   * number of points has been collected.
+   *
+   * One question's share starts with its first answer and then moves with
+   * practice:
+   *
+   *   - a right answer on the first try is the strongest evidence, a first
+   *     miss starts lower and needs more right answers to catch up;
+   *   - every further right answer adds a little, so a question practised
+   *     several times is worth more than one seen once;
+   *   - a later miss costs more than a right answer adds, so a rusty
+   *     question loses ground again.
+   *
+   * Shares are fractions in [0, 1]; masteryOf() averages and scales them.
    * ------------------------------------------------------------------ */
   var MASTERY = {
-    firstCorrect: 12,
-    repeatCorrect: 5,
-    wrong: -8,
+    firstTry: 0.8,
+    retry: 0.55,
+    practiceGain: 0.1,
+    missPenalty: 0.2,
     cap: 100,
     tiers: [
       { min: 85, key: 'mastered', label: 'Mastered' },
@@ -542,7 +555,6 @@
         if (!rec || typeof rec !== 'object') return;
         var attempts = Math.max(0, rec.a | 0);
         state.sets[setId] = {
-          points: clamp(Math.round(rec.points) || 0, 0, MASTERY.cap),
           a: attempts,
           c: clamp(rec.c | 0, 0, attempts),
           streak: Math.max(0, rec.streak | 0)
@@ -656,12 +668,7 @@
     };
     state.q[key] = rec;
 
-    var set = state.sets[setId] || { points: 0, a: 0, c: 0, streak: 0 };
-    var pointsBefore = set.points;
-    var delta = correct
-      ? (hadCorrectBefore ? MASTERY.repeatCorrect : MASTERY.firstCorrect)
-      : MASTERY.wrong;
-    set.points = clamp(set.points + delta, 0, MASTERY.cap);
+    var set = state.sets[setId] || { a: 0, c: 0, streak: 0 };
     set.a += 1;
     set.c += correct ? 1 : 0;
     set.streak = correct ? set.streak + 1 : 0;
@@ -681,9 +688,6 @@
       correct: correct,
       expected: expected,
       chosen: chosen,
-      pointsBefore: pointsBefore,
-      pointsAfter: set.points,
-      pointsDelta: set.points - pointsBefore,
       coin: correct ? (hadCorrectBefore ? 'repeat' : 'new') : 'miss',
       boxBefore: boxBefore,
       boxAfter: boxAfter,
@@ -699,9 +703,30 @@
     return MASTERY.tiers[MASTERY.tiers.length - 1];
   }
 
-  function masteryOf(state, setId) {
-    var rec = state.sets[setId];
-    return rec ? rec.points : 0;
+  /* The question's share of the set's mastery, in [0, 1]. */
+  function questionMastery(rec) {
+    if (!rec || !rec.a || !rec.c) return 0;
+    var correct = rec.c;
+    var wrong = rec.a - correct;
+    var base = rec.f ? MASTERY.firstTry : MASTERY.retry;
+    var gained = (correct - 1) * MASTERY.practiceGain;
+    /* The first miss is already reflected in the lower base; every later miss
+     * costs again. A question right on the first try starts with no free miss. */
+    var misses = rec.f ? wrong : Math.max(0, wrong - 1);
+    return clamp(base + gained - misses * MASTERY.missPenalty, 0, 1);
+  }
+
+  /* The set's 0-100 score: the mean of every question's share. Unseen
+   * questions pull the mean down; an archived unit is not in `questions`, so
+   * its records do not silently count towards the active set either. */
+  function masteryOf(state, setId, questions) {
+    var list = Array.isArray(questions) ? questions : [];
+    if (!list.length) return 0;
+    var sum = 0;
+    for (var i = 0; i < list.length; i++) {
+      sum += questionMastery(recordFor(state, setId, list[i].id));
+    }
+    return clamp(Math.round((sum / list.length) * 100), 0, MASTERY.cap);
   }
 
   /* ------------------------------------------------------------------ *
@@ -803,7 +828,7 @@
       correct: 0,
       correctFirstTry: 0,
       due: 0,
-      points: masteryOf(state, set.id),
+      points: masteryOf(state, set.id, questionsOf(set)),
       streak: (state.sets[set.id] || {}).streak || 0
     };
     row.unitRows.forEach(function (unitRow) {
@@ -822,9 +847,9 @@
     return row;
   }
 
-  /* One unit of a set. Mastery points stay a per-set total (that is what
-   * applyAnswer updates); a unit row reports coverage, first-try accuracy and
-   * what is due among its own questions. */
+  /* One unit of a set. Mastery stays a per-set average over all of the set's
+   * questions; a unit row reports coverage, first-try accuracy and what is due
+   * among its own questions. */
   function unitStats(state, set, unit, now) {
     now = now || Date.now();
     var row = {

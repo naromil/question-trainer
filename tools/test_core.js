@@ -355,7 +355,7 @@ test('choicesFor: every question ends with an "I don\'t know" choice', () => {
 
 /* ---------------------------------------------------------------- grading */
 
-test('applyAnswer: first-try correct earns full mastery and schedules review', () => {
+test('applyAnswer: first-try correct starts a question at 80% and schedules review', () => {
   const [set] = load(rawSet());
   const state = C.emptyState(NOW);
   const result = C.applyAnswer(state, set.id, set.questions[0], 1, NOW);
@@ -363,10 +363,9 @@ test('applyAnswer: first-try correct earns full mastery and schedules review', (
   assert.equal(result.correct, true);
   assert.equal(result.coin, 'new');
   assert.equal(result.firstCorrect, true);
-  assert.equal(result.pointsDelta, C.MASTERY.firstCorrect);
   assert.equal(state.totals.a, 1);
   assert.equal(state.totals.c, 1);
-  assert.equal(state.sets[set.id].points, C.MASTERY.firstCorrect);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 80);
 
   const rec = state.q[C.questionKey(set.id, 'q1')];
   assert.equal(rec.a, 1);
@@ -376,33 +375,40 @@ test('applyAnswer: first-try correct earns full mastery and schedules review', (
   assert.equal(rec.due, NOW + DAY);
 });
 
-test('applyAnswer: a correct repeat is worth less than the first time', () => {
+test('applyAnswer: repeated correct answers raise the question\'s share', () => {
   const [set] = load(rawSet());
   const state = C.emptyState(NOW);
   const q1 = set.questions[0];
   C.applyAnswer(state, set.id, q1, 1, NOW);
-  const result = C.applyAnswer(state, set.id, q1, 1, NOW + 2 * DAY);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 80);
 
+  const result = C.applyAnswer(state, set.id, q1, 1, NOW + 2 * DAY);
   assert.equal(result.coin, 'repeat');
   assert.equal(result.firstCorrect, false);
-  assert.equal(result.pointsDelta, C.MASTERY.repeatCorrect);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 90);
   const rec = state.q[C.questionKey(set.id, 'q1')];
   assert.equal(rec.box, 2);
   assert.equal(rec.f, 1);
 });
 
-test('applyAnswer: a miss costs mastery and makes the item due immediately', () => {
+test('applyAnswer: a miss costs part of the question\'s share and makes it due', () => {
   const [set] = load(rawSet());
   const state = C.emptyState(NOW);
   const result = C.applyAnswer(state, set.id, set.questions[0], 0, NOW);
 
   assert.equal(result.correct, false);
   assert.equal(result.coin, 'miss');
-  assert.equal(result.pointsDelta, 0, 'mastery is floored at zero');
+  assert.equal(C.masteryOf(state, set.id, set.questions), 0);
   const rec = state.q[C.questionKey(set.id, 'q1')];
   assert.equal(rec.box, 0);
   assert.equal(rec.due, NOW);
   assert.equal(rec.f, 0);
+
+  const lapsed = C.emptyState(NOW);
+  C.applyAnswer(lapsed, set.id, set.questions[0], 1, NOW);
+  C.applyAnswer(lapsed, set.id, set.questions[0], 0, NOW + DAY);
+  assert.equal(C.masteryOf(lapsed, set.id, set.questions), 60,
+    'a later miss takes the first-try share back down');
 });
 
 test('applyAnswer: the "I don\'t know" choice is always a miss', () => {
@@ -410,7 +416,7 @@ test('applyAnswer: the "I don\'t know" choice is always a miss', () => {
   const state = C.emptyState(NOW);
   const q = set.questions[0];
   const dontKnow = C.choicesFor(q).length - 1;
-  C.applyAnswer(state, set.id, q, 1, NOW); // right once, so a later miss is visible
+  C.applyAnswer(state, set.id, q, 1, NOW); // right once
   const result = C.applyAnswer(state, set.id, q, dontKnow, NOW + DAY);
 
   assert.equal(result.correct, false);
@@ -419,7 +425,7 @@ test('applyAnswer: the "I don\'t know" choice is always a miss', () => {
   assert.equal(result.coin, 'miss');
   assert.equal(result.firstCorrect, false);
   assert.equal(result.boxAfter, 0);
-  assert.equal(result.pointsDelta, C.MASTERY.wrong);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 60);
   const rec = state.q[C.questionKey(set.id, 'q1')];
   assert.equal(rec.a, 2);
   assert.equal(rec.c, 1);
@@ -441,10 +447,68 @@ test('mastery is capped at 100 and floored at 0', () => {
   const [set] = load(rawSet());
   const state = C.emptyState(NOW);
   const q1 = set.questions[0];
-  for (let i = 0; i < 20; i += 1) C.applyAnswer(state, set.id, q1, 1, NOW + i * DAY);
-  assert.equal(state.sets[set.id].points, 100);
-  for (let i = 0; i < 20; i += 1) C.applyAnswer(state, set.id, q1, 0, NOW + (30 + i) * DAY);
-  assert.equal(state.sets[set.id].points, 0);
+  for (let i = 0; i < 20; i += 1) {
+    C.applyAnswer(state, set.id, q1, 1, NOW + i * DAY);
+  }
+  assert.equal(C.masteryOf(state, set.id, set.questions), 100);
+  for (let i = 0; i < 20; i += 1) {
+    C.applyAnswer(state, set.id, q1, 0, NOW + (30 + i) * DAY);
+  }
+  assert.equal(C.masteryOf(state, set.id, set.questions), 0);
+});
+
+test('mastery is averaged over the whole set, whatever its size', () => {
+  const four = loadSet(rawSet({
+    id: 'four',
+    questions: [1, 2, 3, 4].map((n) => question({ id: 'q' + n }))
+  }));
+  const fourQuestions = C.questionsOf(four);
+  const fourState = C.emptyState(NOW);
+  fourQuestions.forEach((q) => {
+    C.applyAnswer(fourState, four.id, q, 1, NOW);
+  });
+  assert.equal(C.masteryOf(fourState, four.id, fourQuestions), 80);
+
+  const twelve = loadSet(rawSet({
+    id: 'twelve',
+    questions: Array.from({ length: 12 }, (_, i) => question({ id: 'q' + (i + 1) }))
+  }));
+  const twelveQuestions = C.questionsOf(twelve);
+  const twelveState = C.emptyState(NOW);
+  twelveQuestions.forEach((q) => {
+    C.applyAnswer(twelveState, twelve.id, q, 1, NOW);
+  });
+  assert.equal(C.masteryOf(twelveState, twelve.id, twelveQuestions), 80,
+    'a full set is worth the same whether it holds 4 or 12 questions');
+
+  const oneOfFour = C.emptyState(NOW);
+  C.applyAnswer(oneOfFour, four.id, fourQuestions[0], 1, NOW);
+  assert.equal(C.masteryOf(oneOfFour, four.id, fourQuestions), 20);
+
+  const oneOfTwelve = C.emptyState(NOW);
+  C.applyAnswer(oneOfTwelve, twelve.id, twelveQuestions[0], 1, NOW);
+  assert.equal(C.masteryOf(oneOfTwelve, twelve.id, twelveQuestions), 7,
+    'partial coverage is measured against the whole set');
+});
+
+test('mastery: repeated practice lifts a question, a first miss starts it lower', () => {
+  const [set] = load(rawSet());
+  const q = set.questions[0];
+
+  const clean = C.emptyState(NOW);
+  C.applyAnswer(clean, set.id, q, 1, NOW);
+  assert.equal(C.masteryOf(clean, set.id, set.questions), 80);
+  C.applyAnswer(clean, set.id, q, 1, NOW + DAY);
+  assert.equal(C.masteryOf(clean, set.id, set.questions), 90);
+  C.applyAnswer(clean, set.id, q, 1, NOW + 2 * DAY);
+  assert.equal(C.masteryOf(clean, set.id, set.questions), 100);
+
+  const missedFirst = C.emptyState(NOW);
+  C.applyAnswer(missedFirst, set.id, q, 0, NOW);
+  C.applyAnswer(missedFirst, set.id, q, 1, NOW + DAY);
+  assert.equal(C.masteryOf(missedFirst, set.id, set.questions), 55);
+  C.applyAnswer(missedFirst, set.id, q, 1, NOW + 2 * DAY);
+  assert.equal(C.masteryOf(missedFirst, set.id, set.questions), 65);
 });
 
 test('tierOf: tiers follow the point thresholds', () => {
@@ -542,7 +606,8 @@ test('a unit session still keys progress by set id plus question id', () => {
 
   C.applyAnswer(state, set.id, picked[0], 1, NOW);
   assert.ok(state.q[C.questionKey('set-1', 'q2')], 'stored under the set id');
-  assert.equal(state.sets['set-1'].points, C.MASTERY.firstCorrect);
+  assert.equal(C.masteryOf(state, set.id, C.questionsOf(set)), 40,
+    'the answer counts against the whole two-question set, not just its unit');
 });
 
 test('unitStats and setStats: units are reported inside the set', () => {
@@ -568,6 +633,8 @@ test('unitStats and setStats: units are reported inside the set', () => {
   assert.equal(row.unitRows.length, 2);
   assert.equal(row.due, 1, 'the miss is due immediately');
   assert.equal(row.accuracy, 50);
+  assert.equal(row.points, 27,
+    'one first-try question of three is 80/3, rounded; unseen questions count zero');
 });
 
 /* --------------------------------------------------------------- archive */
@@ -630,6 +697,24 @@ test('archiveUnit: hides one unit and keeps the rest of the set', () => {
   assert.deepEqual(C.archivedSets(state), []);
   assert.deepEqual(C.activeSets(state, [set])[0].units.map((unit) => unit.id), ['u1', 'u2']);
   assert.deepEqual(state.local, {}, 'the source still has the unit, so no local copy is needed');
+});
+
+test('mastery: an archived unit leaves the active set\'s scale', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', title: 'Unit One', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[0], 1, NOW);
+  C.applyAnswer(state, set.id, set.units[1].questions[0], 1, NOW);
+  assert.equal(C.masteryOf(state, set.id, C.questionsOf(set)), 80);
+
+  C.archiveUnit(state, set, set.units[1], NOW + 1);
+  const active = C.activeSets(state, [set])[0];
+  assert.equal(C.questionsOf(active).length, 1);
+  assert.equal(C.masteryOf(state, set.id, C.questionsOf(active)), 80,
+    'the archived unit\'s record must not inflate the remaining set');
+  assert.equal(C.setStats(state, active, NOW + 2).points, 80);
 });
 
 test('archiveUnit: the same unit id in another set is untouched', () => {
@@ -747,7 +832,7 @@ test('sanitizeState: clamps nonsense records instead of trusting them', () => {
     app: C.STATE_APP,
     v: 1,
     q: {
-      key: { a: 3, c: 9, f: 7, box: 99, due: 'later', last: null },
+      key: { a: 3, c: 9, f: 7, box: 99, due: 'later', last: null, fast: 5000 },
       empty: { a: 0 }
     },
     sets: { set: { points: 999, a: -2, c: 4, streak: -3 } },
@@ -759,8 +844,9 @@ test('sanitizeState: clamps nonsense records instead of trusting them', () => {
   assert.equal(state.q.key.box, C.SRS_LAST_BOX);
   assert.equal(state.q.key.due, NOW);
   assert.equal(state.q.key.f, 1);
+  assert.equal(state.q.key.fast, undefined, 'timing is no longer part of mastery');
   assert.equal(state.q.empty, undefined);
-  assert.equal(state.sets.set.points, 100);
+  assert.equal(state.sets.set.points, undefined, 'the old stored total is not kept');
   assert.equal(state.sets.set.a, 0);
   assert.equal(state.sets.set.streak, 0);
   assert.equal(state.settings.length, 10);
@@ -768,6 +854,24 @@ test('sanitizeState: clamps nonsense records instead of trusting them', () => {
   assert.equal(state.settings.sound, false);
   assert.equal(state.settings.practiceAll, true);
   assert.deepEqual(state.totals, { a: 2, c: 2, sessions: 0 });
+});
+
+test('sanitizeState: an old export migrates from stored points to the derived score', () => {
+  const [set] = load(rawSet());
+  const key = C.questionKey(set.id, 'q1');
+  const state = C.sanitizeState({
+    app: C.STATE_APP,
+    v: 1,
+    q: { [key]: { a: 1, c: 1, f: 1, box: 1, due: NOW + DAY, last: NOW } },
+    sets: { [set.id]: { points: 100, a: 1, c: 1, streak: 1 } },
+    local: {}, archived: {}, archivedUnits: {}, days: {},
+    totals: { a: 1, c: 1, sessions: 1 }
+  }, NOW);
+
+  assert.equal(state.q[key].fast, undefined, 'timing is not carried into the score');
+  assert.equal(state.sets[set.id].points, undefined);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 80,
+    'the score is recomputed from the first-try record, not the old total');
 });
 
 test('sanitizeState: a legacy flat archive becomes a one-unit set', () => {
@@ -839,7 +943,8 @@ test('setStats and overallStats agree with the recorded answers', () => {
   assert.equal(row.correctFirstTry, 1);
   assert.equal(row.accuracy, 50);
   assert.equal(row.due, 0);
-  assert.equal(row.points, C.MASTERY.firstCorrect - 8 + C.MASTERY.firstCorrect);
+  assert.equal(row.points, 68,
+    'q1 at 0.8 and q2 at 0.55 (first miss, then right) average to 0.675');
 
   const stats = C.overallStats(state, [set], NOW + 2000);
   assert.equal(stats.answered, 3);
@@ -868,7 +973,8 @@ test('resetSetProgress: forgets one set and keeps its neighbours', () => {
   assert.equal(removed, 2);
   assert.deepEqual(Object.keys(state.q), ['set-2/q1']);
   assert.equal(state.sets[set.id], undefined);
-  assert.equal(state.sets[other.id].points, C.MASTERY.firstCorrect);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 0);
+  assert.equal(C.masteryOf(state, other.id, other.questions), 40);
   assert.deepEqual(state.totals, totals, 'cross-set totals keep their history');
   assert.equal(state.updated, NOW + 1);
   assert.equal(C.setStats(state, set, NOW + 2).attempted, 0);

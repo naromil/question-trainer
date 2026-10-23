@@ -139,9 +139,9 @@ readers; `imageCaption` is visible to everyone.
 
 ## ID stability
 
-Progress — attempts, first-try flags, spaced-review boxes, mastery points and
-archived snapshots — is stored against `set id / question id`, never against a
-unit, a file name or a position in an array. That means:
+Progress — attempt counts, first-try flags, spaced-review boxes and archived
+snapshots — is stored against `set id / question id`, never against a unit, a
+file name or a position in an array. That means:
 
 * Rewording a question, editing a choice, fixing an explanation or reordering
   the `questions` array keeps the existing progress.
@@ -158,9 +158,10 @@ The same question id may be used in two different sets; the two records are
 independent. Set ids must be unique across the bank, unit ids within their set,
 and question ids within their set.
 
-Mastery is a per-set total. A unit row reports that unit's own coverage (answered
-of total), first-try accuracy and due count; the units add up to the set's
-numbers.
+Mastery is a per-set average of every question's own share (the root README
+gives the formula). A unit row reports that unit's own coverage (answered of
+total), first-try accuracy and due count; the units add up to the set's coverage
+and due numbers.
 
 ## Validation and errors
 

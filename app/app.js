@@ -1371,7 +1371,8 @@
     if (session.index >= session.questions.length) { renderResults(); return; }
 
     var record = state.sets[set.id] || {};
-    var mastery = Math.round(record.points || 0);
+    var questions = C.questionsOf(set);
+    var mastery = C.masteryOf(state, set.id, questions);
     var run = record.streak || 0;
 
     appEl.innerHTML =
@@ -1381,8 +1382,10 @@
           '<div class="head-title"><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
             esc(modeLabel(session.cfg.mode)) + '</span></div>' +
           '<div class="prac-tools">' +
-            '<span class="pill mastery-pill" id="mastery-pill" title="Mastery in ' +
-              esc(set.title) + '">Mastery <b id="mastery-pill-value">' + mastery + '%</b></span>' +
+            '<span class="pill mastery-pill" id="mastery-pill" title="Mastery of ' +
+              esc(set.title) + ' averaged over all ' + questions.length + ' questions — ' +
+              'first-try answers count most; repeats add, misses take away">Mastery ' +
+              '<b id="mastery-pill-value">' + mastery + '%</b></span>' +
             '<span class="pill streak-chip" id="streak-chip"' +
               (run >= 2 ? '' : ' hidden') + ' title="Correct answers in a row in this set">' +
               '🔥 <b id="streak-value">' + run + '</b></span>' +
@@ -1740,7 +1743,10 @@
   function checkAnswer() {
     if (session.checked || session.selected == null) return;
     var question = session.questions[session.index];
+    var questions = C.questionsOf(session.set);
+    var pointsBefore = C.masteryOf(state, session.set.id, questions);
     var result = C.applyAnswer(state, session.set.id, question, session.selected, Date.now());
+    var pointsAfter = C.masteryOf(state, session.set.id, questions);
     session.checked = true;
     var record = {
       index: session.index,
@@ -1749,10 +1755,10 @@
       chosen: result.chosen,
       correct: result.correct,
       expected: result.expected,
-      pointsDelta: result.pointsDelta,
+      pointsDelta: pointsAfter - pointsBefore,
       coin: result.coin,
-      pointsBefore: result.pointsBefore,
-      pointsAfter: result.pointsAfter,
+      pointsBefore: pointsBefore,
+      pointsAfter: pointsAfter,
       boxBefore: result.boxBefore,
       boxAfter: result.boxAfter,
       streak: (state.sets[session.set.id] || {}).streak || 0

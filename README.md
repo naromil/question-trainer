@@ -77,9 +77,21 @@ origins.
 
 ### Mastery
 
-A 0–100 point total per set.
+A 0–100 score per set. Every question in the set contributes an equal share,
+and those shares are averaged, so a set of five and a set of fifty are measured
+on the same scale; unanswered questions count as zero.
 
-* first-time correct **+12**, correct repeat **+5**, miss **−8** — floored at 0, capped at 100;
+Each question's share starts with its first answer and then moves with practice:
+
+* right on the first try: **80%**; first answer missed: **55%** and it needs more
+  correct answers to catch up;
+* each further correct answer adds **10%** to that question's share;
+* a later miss takes **20%** off it.
+
+So the set score rewards coverage, first-try correctness and repeated practice,
+and it cannot be pushed to 100 by grinding one question: a perfect first run
+through a set reaches about 80%, and repeating the set correctly takes it higher.
+
 * tiers: **Familiar** ≥ 1, **Proficient** ≥ 50, **Mastered** ≥ 85.
 
 ### Spaced review
