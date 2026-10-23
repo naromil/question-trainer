@@ -237,38 +237,53 @@
   }
 
   /* ------------------------------------------------------------ data load */
-  /* A set file is either the flat set object or a { "sets": [...] } wrapper.
-   * Every error is prefixed with the file it came from. */
-  function parseBankFile(name, text) {
-    var raw;
-    try {
-      raw = JSON.parse(text);
-    } catch (err) {
-      throw new Error('invalid JSON: ' + err.message);
-    }
-    if (raw && typeof raw === 'object' && !Array.isArray(raw) && Array.isArray(raw.sets)) {
-      var bank = C.normalizeBank(raw);
-      bank.errors = bank.errors.map(function (error) {
-        return name + ': ' + error.message;
-      });
-      return bank;
-    }
-    try {
-      return { sets: [C.normalizeSet(raw, 0)], errors: [] };
-    } catch (err) {
-      return { sets: [], errors: [name + ': ' + err.message] };
-    }
-  }
-
-  function fetchBankFile(name, indexUrl) {
-    return fetch(new URL(name, indexUrl), { cache: 'no-store' }).then(function (response) {
+  /* A set is a directory under questions/. questions/index.json names the
+   * directories; each one has an index.json naming its unit files. Every error
+   * is prefixed with the path it came from. */
+  function fetchJSON(url) {
+    return fetch(url, { cache: 'no-store' }).then(function (response) {
       if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
       return response.text();
     }).then(function (text) {
-      return parseBankFile(name, text);
-    }).catch(function (err) {
-      return { sets: [], errors: [name + ': ' + err.message] };
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        throw new Error('invalid JSON: ' + err.message);
+      }
     });
+  }
+
+  function fetchUnit(name, file, folderUrl) {
+    return fetchJSON(new URL(file, folderUrl)).then(function (raw) {
+      return { file: name + '/' + file, raw: raw };
+    }).catch(function (err) {
+      return { file: name + '/' + file, error: err.message };
+    });
+  }
+
+  /* Read one set directory: its index.json, then every unit it lists. A bad
+   * unit is reported and dropped; a bad directory index drops the whole set. */
+  async function loadFolder(name, indexUrl) {
+    var folderUrl = new URL(name + '/', indexUrl);
+    var descriptor;
+    try {
+      descriptor = await fetchJSON(new URL('index.json', folderUrl));
+    } catch (err) {
+      return { set: null, errors: [name + '/index.json: ' + err.message] };
+    }
+
+    var folder;
+    try {
+      folder = C.normalizeFolder(descriptor, name);
+    } catch (err) {
+      return { set: null, errors: [name + '/index.json: ' + err.message] };
+    }
+
+    var entries = await Promise.all(folder.units.map(function (file) {
+      return fetchUnit(name, file, folderUrl);
+    }));
+    var built = C.buildSet(folder, entries);
+    return { set: built.set, errors: built.errors };
   }
 
   async function loadBank() {
@@ -282,46 +297,43 @@
     var indexUrl = new URL(BANK_URL, location.href);
     var index;
     try {
-      var response = await fetch(indexUrl, { cache: 'no-store' });
-      if (!response.ok) throw new Error('HTTP ' + response.status + ' ' + response.statusText);
-      index = JSON.parse(await response.text());
+      index = await fetchJSON(indexUrl);
     } catch (err) {
       LOAD_ERRORS.push('Could not read ' + indexUrl.pathname + ': ' + err.message);
       return;
     }
     if (!index || typeof index !== 'object' || Array.isArray(index) ||
-        !Array.isArray(index.files)) {
-      LOAD_ERRORS.push('questions/index.json must be an object with a "files" array.');
+        !Array.isArray(index.sets)) {
+      LOAD_ERRORS.push('questions/index.json must be an object with a "sets" array of ' +
+        'set directory names.');
       return;
     }
 
     var names = [];
-    index.files.forEach(function (value) {
+    index.sets.forEach(function (value) {
       var name = typeof value === 'string' ? value.trim() : '';
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
         LOAD_ERRORS.push('questions/index.json: ' + JSON.stringify(value) +
-          ' is not a bare file name.');
+          ' is not a set directory name.');
         return;
       }
       names.push(name);
     });
 
     var results = await Promise.all(names.map(function (name) {
-      return fetchBankFile(name, indexUrl);
+      return loadFolder(name, indexUrl);
     }));
     var seen = {};
     results.forEach(function (result, i) {
-      var name = names[i];
-      result.sets.forEach(function (set) {
-        if (seen[set.id]) {
-          LOAD_ERRORS.push(name + ': duplicate set id "' + set.id +
-            '" (already loaded from another file).');
-          return;
-        }
-        seen[set.id] = true;
-        SOURCE_SETS.push(set);
-      });
       LOAD_ERRORS = LOAD_ERRORS.concat(result.errors);
+      if (!result.set) return;
+      if (seen[result.set.id]) {
+        LOAD_ERRORS.push(names[i] + ': duplicate set id "' + result.set.id +
+          '" (already loaded from another directory).');
+        return;
+      }
+      seen[result.set.id] = true;
+      SOURCE_SETS.push(result.set);
     });
   }
 
@@ -437,31 +449,77 @@
   }
 
   /* ------------------------------------------------------------ home */
+  function practiceHref(setId, unitId, mode) {
+    var href = '#/practice?set=' + encodeURIComponent(setId);
+    if (unitId) href += '&unit=' + encodeURIComponent(unitId);
+    if (mode) href += '&mode=' + mode;
+    return href;
+  }
+
+  /* One unit inside a set card: its coverage, what is due, and the same three
+   * options a set has. */
+  function unitRowHTML(row) {
+    var meta = row.attempted + '/' + row.total + ' answered' +
+      (row.attempted ? ' · ' + row.accuracy + '% first try' : '');
+    return '<li class="unit-row">' +
+      '<div class="unit-head"><b>' + esc(row.title) + '</b>' +
+        (row.due ? '<span class="tag due">' + row.due + ' due</span>' : '') + '</div>' +
+      '<div class="bar unit-bar"><i style="width:' + row.coverage + '%"></i></div>' +
+      '<div class="meta small">' + meta + '</div>' +
+      '<div class="row unit-actions">' +
+        '<a class="btn btn-sm btn-primary" href="' + practiceHref(row.setId, row.id, null) +
+          '">Practice</a>' +
+        '<a class="btn btn-sm" href="' + practiceHref(row.setId, row.id, 'review') +
+          '">Review</a>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-archive-unit="' +
+          esc(row.id) + '" data-set="' + esc(row.setId) + '">Archive</button>' +
+      '</div></li>';
+  }
+
+  /* A set card is a long row, not a tile. A set made of several units also gets
+   * a units panel on its right, each unit carrying its own three options. */
   function setCard(row) {
     var tier = row.tier;
+    var multi = row.units > 1;
     var due = row.due ? '<span class="tag due">' + row.due + ' due</span>' : '';
-    return '<article class="card set-card">' +
-      '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
-        '<span class="tag ' + tier.key + '">' + tier.label + '</span></div>' +
-      (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
-      '<div class="bar tier-' + tier.key + '"><i style="width:' + row.points + '%"></i></div>' +
-      '<div class="meta">' + row.points + '% mastery · ' +
-        row.attempted + '/' + row.total + ' answered · ' +
-        row.accuracy + '% first try ' + due + '</div>' +
-      '<div class="row">' +
-        '<a class="btn btn-sm btn-primary" href="#/practice?set=' +
-          encodeURIComponent(row.id) + '">Practice</a>' +
-        '<a class="btn btn-sm" href="#/practice?set=' + encodeURIComponent(row.id) +
-          '&mode=review">Review</a>' +
-        '<button type="button" class="btn btn-ghost btn-sm" data-archive="' +
-          esc(row.id) + '">Archive</button>' +
-      '</div></article>';
+    return '<article class="card set-card" data-units="' + row.units + '"' +
+      (multi ? ' data-multi="1"' : '') + '>' +
+      '<div class="set-main">' +
+        '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
+          '<span class="row">' +
+            '<span class="tag ' + tier.key + '">' + tier.label + '</span>' +
+            (multi ? '<span class="tag units">' + plural(row.units, 'unit') + '</span>' : '') +
+          '</span></div>' +
+        (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
+        '<div class="bar tier-' + tier.key + '"><i style="width:' + row.points + '%"></i></div>' +
+        '<div class="meta">' + row.points + '% mastery · ' +
+          row.attempted + '/' + row.total + ' answered · ' +
+          row.accuracy + '% first try ' + due + '</div>' +
+        '<div class="row set-actions">' +
+          '<a class="btn btn-sm btn-primary" href="' + practiceHref(row.id, null, null) +
+            '">Practice</a>' +
+          '<a class="btn btn-sm" href="' + practiceHref(row.id, null, 'review') +
+            '">Review</a>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-archive="' + esc(row.id) +
+            '">Archive</button>' +
+        '</div>' +
+      '</div>' +
+      (multi
+        ? '<div class="set-units"><h4>Units</h4><ul class="unit-list">' +
+          row.unitRows.map(unitRowHTML).join('') + '</ul></div>'
+        : '') +
+      '</article>';
   }
 
   function bindArchiveButtons() {
     $$('[data-archive]', appEl).forEach(function (button) {
       button.addEventListener('click', function () {
         archiveSet(button.getAttribute('data-archive'));
+      });
+    });
+    $$('[data-archive-unit]', appEl).forEach(function (button) {
+      button.addEventListener('click', function () {
+        archiveUnit(button.getAttribute('data-set'), button.getAttribute('data-archive-unit'));
       });
     });
   }
@@ -479,18 +537,35 @@
     render();
   }
 
+  function archiveUnit(setId, unitId) {
+    var set = C.findSet(state, SOURCE_SETS, setId);
+    var unit = set ? C.unitOf(set, unitId) : null;
+    if (!unit) return;
+    if (!window.confirm('Archive the unit "' + unit.title + '" of ' + set.title +
+        '? You can restore it from the Archive page.')) {
+      return;
+    }
+    C.archiveUnit(state, set, unit, Date.now());
+    if (!saveState()) {
+      window.alert('The archive could not be saved because browser storage is full.');
+    }
+    render();
+  }
+
   function renderHome() {
     var active = C.activeSets(state, SOURCE_SETS);
     var archived = C.archivedSets(state);
     var all = C.allSets(state, SOURCE_SETS);
     var stats = C.overallStats(state, all);
     var rows = active.map(function (set) { return C.setStats(state, set, Date.now()); });
+    var unitCount = rows.reduce(function (n, row) { return n + row.units; }, 0);
 
     var html = '<div class="hero">' +
       '<div class="card"><h1>Question Trainer</h1>' +
-      '<p class="muted">Pick one question set and work through it. Every session stays ' +
-      'inside that set; there is no mixed practice. Correct answers build mastery, ' +
-      'spaced review brings questions back, and finished sets can be archived.</p>' +
+      '<p class="muted">Pick one question set and work through it. A set is a folder of one ' +
+      'or more units; practice it whole or one unit at a time. Every session stays inside ' +
+      'that set; there is no mixed practice. Correct answers build mastery, ' +
+      'spaced review brings questions back, and finished sets or units can be archived.</p>' +
       '</div>' +
       '<div class="card"><div class="statgrid">' +
         '<div class="stat"><b>' + stats.seen + '<span class="muted">/' +
@@ -501,8 +576,11 @@
       '</div></div></div>';
 
     if (rows.length) {
-      html += '<section class="set-list"><h2>Question sets</h2>' +
-        '<div class="sets">' + rows.map(setCard).join('') + '</div></section>';
+      var heading = unitCount !== rows.length
+        ? plural(rows.length, 'set') + ' · ' + plural(unitCount, 'unit')
+        : plural(rows.length, 'set');
+      html += '<section class="set-list"><h2>Question sets · ' + heading +
+        '</h2><div class="sets">' + rows.map(setCard).join('') + '</div></section>';
     } else {
       html += '<div class="card"><h2>' +
         (archived.length ? 'All sets are archived' : 'No question sets loaded') + '</h2>' +
@@ -519,63 +597,119 @@
   }
 
   /* ------------------------------------------------------------ archive */
+  function sourceSet(setId) {
+    for (var i = 0; i < SOURCE_SETS.length; i++) {
+      if (SOURCE_SETS[i].id === setId) return SOURCE_SETS[i];
+    }
+    return null;
+  }
+
   function bindRestoreButtons() {
     $$('[data-restore]', appEl).forEach(function (button) {
       button.addEventListener('click', function () {
         restoreSet(button.getAttribute('data-restore'));
       });
     });
+    $$('[data-restore-unit]', appEl).forEach(function (button) {
+      button.addEventListener('click', function () {
+        restoreUnit(button.getAttribute('data-set'), button.getAttribute('data-restore-unit'));
+      });
+    });
   }
 
   function restoreSet(setId) {
-    var source = null;
-    for (var i = 0; i < SOURCE_SETS.length; i++) {
-      if (SOURCE_SETS[i].id === setId) { source = SOURCE_SETS[i]; break; }
-    }
-    C.restoreSet(state, setId, source, Date.now());
+    C.restoreSet(state, setId, sourceSet(setId), Date.now());
     saveState();
     render();
+  }
+
+  function restoreUnit(setId, unitId) {
+    C.restoreUnit(state, unitId, sourceSet(setId), Date.now());
+    saveState();
+    render();
+  }
+
+  function archivedSetCard(entry, now) {
+    var row = C.setStats(state, entry, now);
+    var inSource = !!sourceSet(entry.id);
+    return '<article class="card set-card" data-units="' + row.units + '"' +
+      (row.units > 1 ? ' data-multi="1"' : '') + '>' +
+      '<div class="set-main">' +
+        '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
+          '<span class="tag archived">archived</span></div>' +
+        '<div class="set-text">' +
+          (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
+          '<p class="small muted">Archived ' + esc(fmtDate(entry.archivedAt)) + ' · ' +
+            plural(row.units, 'unit') + '. ' +
+            (inSource
+              ? 'The source folder is still listed in <code>questions/index.json</code>.'
+              : 'The source folder is no longer listed; the archived copy is kept in this browser.') +
+          '</p>' +
+        '</div>' +
+        '<div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
+          '%"></i></div>' +
+        '<div class="meta">' + row.points + '% mastery · ' +
+          row.attempted + '/' + row.total + ' answered · ' +
+          row.accuracy + '% first try' + (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
+        '<div class="row set-actions">' +
+          '<a class="btn btn-sm btn-primary" href="' + practiceHref(row.id, null, null) +
+            '">Practice</a>' +
+          '<a class="btn btn-sm" href="' + practiceHref(row.id, null, 'review') +
+            '">Review</a>' +
+          '<button type="button" class="btn btn-sm" data-restore="' + esc(row.id) +
+            '">Restore</button>' +
+        '</div>' +
+      '</div>' +
+      (row.units > 1
+        ? '<div class="set-units"><h4>Units</h4><ul class="unit-list">' +
+          row.unitRows.map(function (unitRow) {
+            return '<li class="unit-row"><div class="unit-head"><b>' + esc(unitRow.title) +
+              '</b></div><div class="meta small">' + unitRow.attempted + '/' +
+              unitRow.total + ' answered' + (unitRow.due ? ' · ' + unitRow.due + ' due' : '') +
+              '</div></li>';
+          }).join('') + '</ul></div>'
+        : '') +
+      '</article>';
+  }
+
+  function archivedUnitCard(entry, now) {
+    var row = C.unitStats(state, { id: entry.setId }, entry, now);
+    return '<article class="card set-card" data-units="0">' +
+      '<div class="set-main">' +
+        '<div class="spread"><h3>' + esc(entry.title) + '</h3>' +
+          '<span class="tag archived">archived unit</span></div>' +
+        '<p class="small muted">Unit of ' + esc(entry.setTitle || entry.setId) + ', archived ' +
+          esc(fmtDate(entry.archivedAt)) + '.</p>' +
+        '<div class="bar"><i style="width:' + row.coverage + '%"></i></div>' +
+        '<div class="meta">' + row.attempted + '/' + row.total + ' answered' +
+          (row.attempted ? ' · ' + row.accuracy + '% first try' : '') +
+          (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
+        '<div class="row set-actions">' +
+          '<button type="button" class="btn btn-sm btn-primary" data-restore-unit="' +
+            esc(entry.id) + '" data-set="' + esc(entry.setId) + '">Restore</button>' +
+        '</div>' +
+      '</div></article>';
   }
 
   function renderArchive() {
     var rows = C.archivedSets(state);
     var now = Date.now();
     var html = '<div class="card"><h1>Archive</h1>' +
-      '<p class="muted">Archived sets keep their question copy and progress in this ' +
-      'browser (mirrored to disk when served with <code>./qt</code>). Restore one to ' +
-      'put it back on the set list.</p></div>';
+      '<p class="muted">Archived sets and units keep their question copy and progress in this ' +
+      'browser (mirrored to disk when served with <code>./qt</code>). Restore one to put it ' +
+      'back on the set list.</p></div>';
 
     if (!rows.length) {
       html += '<div class="card"><h2>Nothing archived</h2>' +
-        '<p class="muted">Archive a finished set from its card on the <a href="#/">set list</a>.</p>' +
+        '<p class="muted">Archive a finished set or unit from its card on the ' +
+        '<a href="#/">set list</a>.</p>' +
         '</div>';
     } else {
-      rows.forEach(function (set) {
-        var row = C.setStats(state, set, now);
-        var inSource = SOURCE_SETS.some(function (source) { return source.id === set.id; });
-        html += '<article class="card set-card">' +
-          '<div class="spread"><h3>' + esc(row.title) + '</h3>' +
-            '<span class="tag archived">archived</span></div>' +
-          (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
-          '<p class="small muted">Archived ' + esc(fmtDate(set.archivedAt)) + '. ' +
-            (inSource
-              ? 'The source set is still listed in <code>questions/index.json</code>.'
-              : 'The source set is no longer listed; the archived copy is kept in this browser.') +
-          '</p>' +
-          '<div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
-            '%"></i></div>' +
-          '<div class="meta">' + row.points + '% mastery · ' +
-            row.attempted + '/' + row.total + ' answered · ' +
-            row.accuracy + '% first try' + (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
-          '<div class="row">' +
-            '<a class="btn btn-sm btn-primary" href="#/practice?set=' +
-              encodeURIComponent(row.id) + '">Practice</a>' +
-            '<a class="btn btn-sm" href="#/practice?set=' + encodeURIComponent(row.id) +
-              '&mode=review">Review</a>' +
-            '<button type="button" class="btn btn-sm" data-restore="' + esc(row.id) +
-              '">Restore</button>' +
-          '</div></article>';
-      });
+      html += '<div class="sets">' + rows.map(function (entry) {
+        return entry.kind === 'unit'
+          ? archivedUnitCard(entry, now)
+          : archivedSetCard(entry, now);
+      }).join('') + '</div>';
     }
 
     appEl.innerHTML = html;
@@ -584,13 +718,14 @@
 
   /* ------------------------------------------------------------ practice */
   function sameCfg(a, b) {
-    return a && a.setId === b.setId && a.mode === b.mode && a.length === b.length;
+    return a && a.setId === b.setId && a.mode === b.mode && a.length === b.length &&
+      (a.unitId || '') === (b.unitId || '');
   }
 
   function createSession(cfg, preselect) {
     var set = C.findSet(state, SOURCE_SETS, cfg.setId);
     if (!set) return null;
-    var questions = preselect || C.selectSession(state, set.id, set.questions, {
+    var questions = preselect || C.selectSession(state, set.id, C.questionsOf(set, cfg.unitId), {
       mode: cfg.mode === 'review' ? 'review' : 'practice',
       length: cfg.length,
       now: Date.now()
@@ -621,7 +756,9 @@
   }
 
   function sessionTitle() {
-    return session ? session.set.title : '';
+    if (!session) return '';
+    var unit = C.unitOf(session.set, session.cfg.unitId);
+    return unit ? session.set.title + ' · ' + unit.title : session.set.title;
   }
 
   function renderMissingSet(setId) {
@@ -631,25 +768,36 @@
       '<p><a class="btn btn-primary" href="#/">Back to sets</a></p></div>';
   }
 
+  function renderMissingUnit(set, unitId) {
+    appEl.innerHTML = '<div class="card"><h2>Unit not found</h2>' +
+      '<p>' + esc(set.title) + ' has no unit with id <code>' + esc(unitId) +
+      '</code>. It may have been archived or removed from the folder.</p>' +
+      '<p><a class="btn btn-primary" href="#/">Back to sets</a></p></div>';
+  }
+
   function renderEmptySession() {
     var review = session && session.cfg.mode === 'review';
     appEl.innerHTML = '<div class="card"><h2>' +
       (review ? 'Nothing is due for review' : 'Nothing to practice here') + '</h2>' +
       '<p class="muted">' + (review
-        ? 'Every question in this set that you have answered is scheduled for a later date. ' +
+        ? 'Every question here that you have answered is scheduled for a later date. ' +
           'Missed questions come back immediately; the rest come back within a day or two.'
-        : 'This set has no questions to serve.') + '</p>' +
+        : 'This has no questions to serve.') + '</p>' +
       '<div class="row">' +
-        '<a class="btn btn-primary" href="#/practice?set=' +
-          encodeURIComponent(session ? session.cfg.setId : '') + '">Practice this set</a>' +
+        '<a class="btn btn-primary" href="' + practiceHref(
+          session ? session.cfg.setId : '', session ? session.cfg.unitId : '', null) +
+          '">Practice this again</a>' +
         '<a class="btn" href="#/">Back to sets</a>' +
       '</div></div>';
   }
 
   function renderPractice(params) {
     var setId = params.get('set') || '';
+    var unitId = params.get('unit') || '';
     var set = C.findSet(state, SOURCE_SETS, setId);
     if (!set) { renderMissingSet(setId); return; }
+    /* A unit link names a unit of this set, archived or not. */
+    if (unitId && !C.unitOf(set, unitId)) { renderMissingUnit(set, unitId); return; }
 
     var mode = params.get('mode');
     if (mode !== 'review' && mode !== 'retry') mode = 'practice';
@@ -659,13 +807,16 @@
     }
     /* Practice honours the practice-all switch; review ignores it and keeps
      * the chosen length as the cap on what is due. A retry link carries its
-     * own count. */
+     * own count. The count is over the questions this session can serve: the
+     * unit's own list, or the whole set. */
+    var pool = C.questionsOf(set, unitId);
     var requested = parseInt(params.get('n'), 10);
     var defaultLength = mode === 'review'
       ? state.settings.length
-      : C.sessionLength(state.settings, set.questions.length);
+      : C.sessionLength(state.settings, pool.length);
     var cfg = {
       setId: set.id,
+      unitId: unitId,
       mode: mode,
       length: clampInt(requested > 0 ? requested : defaultLength, 1, 50)
     };
@@ -678,7 +829,7 @@
       '<div class="practice-view">' +
         '<div class="prac-head">' +
           '<a class="btn btn-ghost btn-sm" href="#/">← Sets</a>' +
-          '<div><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
+          '<div class="head-title"><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
             esc(modeLabel(session.cfg.mode)) + '</span></div>' +
           '<div class="dots" id="dots"></div>' +
           '<span class="pill" id="timer">0:00</span>' +
@@ -756,6 +907,8 @@
     card.innerHTML =
       '<div class="q-meta">' +
         '<span class="tag">' + esc(session.set.title) + '</span>' +
+        (session.cfg.unitId ? '<span class="tag units">' +
+          esc((C.unitOf(session.set, session.cfg.unitId) || {}).title || '') + '</span>' : '') +
         '<span class="tag">' + (index + 1) + ' of ' + session.questions.length + '</span>' +
       '</div>' +
       passageHTML(question.passage) +
@@ -1050,9 +1203,12 @@
     if (retry) {
       retry.addEventListener('click', function () {
         var setId = session.set.id;
+        var unitId = session.cfg.unitId || '';
         var questions = missed.map(function (r) { return r.question; });
-        createSession({ setId: setId, mode: 'retry', length: questions.length }, questions);
+        createSession({ setId: setId, unitId: unitId, mode: 'retry', length: questions.length },
+          questions);
         location.hash = '#/practice?set=' + encodeURIComponent(setId) +
+          (unitId ? '&unit=' + encodeURIComponent(unitId) : '') +
           '&mode=retry&n=' + questions.length;
         render();
       });
@@ -1080,7 +1236,9 @@
 
     var table = rows.length ? rows.map(function (row) {
       return '<tr><td>' + esc(row.title) +
-        (row.archived ? ' <span class="tag">archived</span>' : '') + '</td>' +
+        (row.archived ? ' <span class="tag">archived</span>' : '') +
+        (row.units > 1 ? ' <span class="tag units">' + plural(row.units, 'unit') + '</span>' : '') +
+        '</td>' +
         '<td><div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
           '%"></i></div></td>' +
         '<td class="num">' + row.points + '%</td>' +
@@ -1091,7 +1249,9 @@
     }).join('') : '<tr><td colspan="7" class="muted">No sets loaded.</td></tr>';
 
     var troubleHTML = trouble.length ? trouble.map(function (row) {
-      return '<details class="review-item"><summary>' + esc(row.set.title) + ' — missed ' +
+      var where = esc(row.set.title) +
+        (row.unit && row.unit.title !== row.set.title ? ' · ' + esc(row.unit.title) : '');
+      return '<details class="review-item"><summary>' + where + ' — missed ' +
         row.wrong + ' of ' + row.attempts + ' attempts</summary>' +
         '<div style="margin-top:.7rem">' + staticQuestionHTML(row.q) + '</div></details>';
     }).join('') : '<p class="muted small">No repeated misses yet.</p>';
@@ -1162,13 +1322,14 @@
       '</div>' +
       '<div class="card"><h3>Question data</h3>' +
       '<p class="small muted">Loaded <b>' + SOURCE_SETS.length + '</b> ' +
-        (SOURCE_SETS.length === 1 ? 'set' : 'sets') +
-        ' from <code>questions/index.json</code>.' +
+        (SOURCE_SETS.length === 1 ? 'set' : 'sets') + ' with <b>' +
+        SOURCE_SETS.reduce(function (n, set) { return n + C.unitsOf(set).length; }, 0) +
+        ' units</b> from <code>questions/index.json</code>.' +
         (LOAD_ERRORS.length ? ' <b>' + LOAD_ERRORS.length + '</b> data ' +
           plural(LOAD_ERRORS.length, 'problem') + ' — see the banner at the top.' : '') +
         ' <a href="#/format">JSON format</a>.</p>' +
       '<p class="small muted">There is no mixed practice: each session draws only from the ' +
-        'set you choose.</p></div>' +
+        'set or unit you choose.</p></div>' +
       '<div class="card"><h3>Progress data</h3>' +
       persistenceHTML() +
       '<p class="muted small">Back it up as JSON if you switch machines or clear site ' +
@@ -1247,11 +1408,16 @@
 
   /* ------------------------------------------------------------ format */
   function renderFormat() {
-    var indexExample = JSON.stringify({ files: ['example-set.json'] }, null, 2);
-    var setExample = JSON.stringify({
+    var indexExample = JSON.stringify({ sets: ['example-set'] }, null, 2);
+    var folderExample = JSON.stringify({
       id: 'example-set',
       title: 'Example Set',
       description: 'Optional one-line description.',
+      units: ['unit-1.json', 'unit-2.json']
+    }, null, 2);
+    var unitExample = JSON.stringify({
+      id: 'unit-1',
+      title: 'Unit 1',
       questions: [
         {
           id: 'q1',
@@ -1265,7 +1431,7 @@
           explanation: 'Canberra is the capital of Australia.',
           explanations: [
             'Sydney is the largest city, but it is not the capital.',
-            'Correct. Canberra is the capital.',
+            'Canberra is the capital of Australia.',
             'Melbourne is a large city, but it is not the capital.',
             'Perth is the capital of Western Australia, not of the country.'
           ]
@@ -1275,20 +1441,33 @@
 
     appEl.innerHTML =
       '<div class="card"><h1>Question JSON format</h1>' +
-      '<p>The app fetches <code>questions/index.json</code> at startup. It lists the ' +
-      'set files to load by bare file name:</p>' +
+      '<p>A question set is a <b>folder</b> under <code>questions/</code>. The app fetches ' +
+      '<code>questions/index.json</code> at startup; it lists the set folders by name:</p>' +
       '<pre class="code">' + esc(indexExample) + '</pre>' +
-      '<p>Each listed file holds one set. The shipped files use the flat form; a ' +
-      '<code>{ "sets": [...] }</code> wrapper with one or more sets is also accepted:</p>' +
-      '<pre class="code">' + esc(setExample) + '</pre>' +
-      '<h3>Set fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
-      '</tr></thead><tbody>' +
+      '<p>Each folder has its own <code>index.json</code> that names the set and the unit ' +
+      'files that make it up:</p>' +
+      '<pre class="code">' + esc(folderExample) + '</pre>' +
+      '<p>Each unit file holds the questions. A set with one unit needs just one file. A set ' +
+      'with several units gets a single card on the set list, with its units on the right; ' +
+      'each unit is practised, reviewed and archived on its own, and the set as a whole has ' +
+      'the same three options:</p>' +
+      '<pre class="code">' + esc(unitExample) + '</pre>' +
+      '<h3>Set folder index fields</h3><table><thead><tr><th>Field</th><th></th>' +
+      '<th>Meaning</th></tr></thead><tbody>' +
       '<tr><td><code>id</code></td><td>required</td><td>Stable, unique set id. Progress ' +
-        'and archiving are keyed by it.</td></tr>' +
+        'and archiving are keyed by it; it defaults to the folder name.</td></tr>' +
       '<tr><td><code>title</code></td><td>required</td><td>Name shown on the set card.</td></tr>' +
       '<tr><td><code>description</code></td><td>optional</td><td>Short line under the title.</td></tr>' +
+      '<tr><td><code>units</code></td><td>required</td><td>One or more bare unit file names ' +
+        'in the same folder, in display order.</td></tr></tbody></table>' +
+      '<h3>Unit fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
+      '</tr></thead><tbody>' +
+      '<tr><td><code>id</code></td><td>required</td><td>Unique within the set.</td></tr>' +
+      '<tr><td><code>title</code></td><td>required</td><td>Name shown on the unit row.</td></tr>' +
+      '<tr><td><code>description</code></td><td>optional</td><td>Short line under the title.</td></tr>' +
       '<tr><td><code>questions</code></td><td>required</td><td>Non-empty array of question ' +
-        'objects.</td></tr></tbody></table>' +
+        'objects. Question ids must be unique across the whole set, because progress is ' +
+        'keyed by set id plus question id.</td></tr></tbody></table>' +
       '<h3>Question fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
       '</tr></thead><tbody>' +
       '<tr><td><code>id</code></td><td>required</td><td>Unique within the set. Stable ids ' +
@@ -1312,8 +1491,9 @@
       '<tr><td><code>explanations</code></td><td>optional</td><td>One entry per choice ' +
         '(string or <code>null</code>); each non-empty entry is shown under that choice.</td></tr>' +
       '</tbody></table>' +
-      '<p class="small muted">A broken file is skipped and reported in the banner with its ' +
-      'file name. Duplicate or missing set ids are reported too.</p></div>' +
+      '<p class="small muted">A broken unit file is skipped and reported in the banner with ' +
+      'its folder and file name; the rest of the set still loads. Duplicate or missing set ' +
+      'ids are reported too.</p></div>' +
       '<div class="card"><h3>Running it</h3>' +
       '<p>Start the trainer from the repository root:</p>' +
       '<pre class="code">./qt' + '\n' +

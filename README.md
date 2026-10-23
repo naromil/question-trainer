@@ -1,12 +1,12 @@
 # Question Trainer
 
-A local-first, set-based multiple-choice trainer. Drop a fixed-format JSON file into
-`questions/`, open the app, and practice one question set at a time — with instant
-grading, per-choice explanations, mastery tracking, spaced review, and an archive for
-sets you have finished.
+A local-first, set-based multiple-choice trainer. Drop a question set — a folder of
+unit files — into `questions/`, open the app, and practice one question set at a time,
+whole or one unit at a time, with instant grading, per-choice explanations, mastery
+tracking, spaced review, and an archive for sets and units you have finished.
 
-No build step and no runtime dependencies: a static page plus one JSON file per
-set under `questions/`.
+No build step and no runtime dependencies: a static page plus one folder per set
+under `questions/`.
 
 ## Run it
 
@@ -53,10 +53,10 @@ origins.
 
 | Screen | What you get |
 |---|---|
-| **Sets** (home) | One card per active question set: mastery bar, tier, answered count, first-try accuracy and due count, with **Practice**, **Review** and **Archive** buttons. There is no mixed practice. |
-| **Session** | One set only. One question at a time with progress dots and an answering-time clock that pauses while you read feedback. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Choices can be crossed out (and un-crossed) before answering. |
-| **Results** | Score, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions**. |
-| **Archive** | Sets you archived, with their progress and a saved copy of their questions. **Restore** puts a set back on the active list. If the set is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
+| **Sets** (home) | One long card per active question set: mastery bar, tier, answered count, first-try accuracy, due count, and **Practice**, **Review**, **Archive** for the set. A set with several units also lists them on the right of its card, each unit with its own **Practice**, **Review** and **Archive**. There is no mixed practice. |
+| **Session** | One set, or one unit of it. One question at a time with progress dots and an answering-time clock that pauses while you read feedback. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, <kbd>Enter</kbd> to check and again for the next question. Choices can be crossed out (and un-crossed) before answering. |
+| **Results** | Score, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions** (inside the same unit when the session was unit-scoped). |
+| **Archive** | Sets and single units you archived, with their progress and a saved copy of their questions. **Restore** puts a set or unit back on the active list. If the source is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
 | **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count, a 14-day activity chart, a per-set table, and repeated trouble spots. |
 | **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. |
 | **Format** | The in-app schema summary with an example; the full reference is [questions/README.md](questions/README.md). |
@@ -80,23 +80,32 @@ and makes it due immediately. Gaps between reviews: **1, 3, 7, 21** days.
 
 ## Question data
 
-`questions/index.json` lists the set files by bare name:
+`questions/index.json` lists the set folders by name:
 
 ```json
-{ "files": ["everyday-science.json", "world-geography.json"] }
+{ "sets": ["everyday-science", "photosynthesis"] }
 ```
 
-Each listed file holds one set, either as a flat object or inside a
-`{ "sets": [...] }` wrapper. A set has `id`, `title`, optional `description`, and a
-non-empty `questions` array; each question has `id`, `question`, two or more
-`choices`, and `answer` as the **0-based index** of the correct choice.
-`passage`, `image` (with optional `imageAlt` and `imageCaption`), `explanation`
-and per-choice `explanations` are optional. Bare image paths are resolved
-against `questions/`, so the files can live in `questions/images/`.
+Each folder has its own `index.json` naming the set and its unit files:
+
+```json
+{ "id": "photosynthesis", "title": "Photosynthesis", "description": "…",
+  "units": ["light-reactions.json", "calvin-c4-cam.json"] }
+```
+
+Each unit file has `id`, `title`, optional `description`, and a non-empty
+`questions` array; each question has `id`, `question`, two or more `choices`, and
+`answer` as the **0-based index** of the correct choice. `passage`, `image` (with
+optional `imageAlt` and `imageCaption`), `explanation` and per-choice
+`explanations` are optional. Bare image paths are resolved against `questions/`,
+so the files can live in `questions/images/`. A set with one unit needs a single
+unit file and looks like a plain long card; a set with several units shows them on
+the right of its card.
 
 Ids are stable keys: progress is stored by set id plus question id, so renaming an
-id starts that item over. A broken file is reported in the banner with its file
-name and skipped; the rest still load. The complete field reference, validation
+id starts that item over, and question ids must be unique across all units of one
+set. A broken unit is reported in the banner with its folder and file name and
+skipped; the rest of the set still loads. The complete field reference, validation
 rules and an "add a set" recipe are in [questions/README.md](questions/README.md);
 the in-app **Format** screen shows a compact version.
 
@@ -105,11 +114,11 @@ the in-app **Format** screen shows a compact version.
 ```
 app/index.html          shell
 app/styles.css          light/dark theme
-app/core.js             pure logic: JSON validation, grading, mastery, SRS,
-                        session selection, archive/restore, stats
+app/core.js             pure logic: JSON validation, sets and units, grading,
+                        mastery, SRS, session selection, archive/restore, stats
 app/app.js              routing, rendering, localStorage + disk mirror
-questions/index.json    list of set files the app loads
-questions/*.json        one set per file
+questions/index.json    list of set folders the app loads
+questions/<set>/        one folder per set: index.json + its unit files
 questions/README.md     complete question-data format reference
 serve.py                stdlib static server + disk progress API
 qt                      one-command launcher for serve.py
@@ -130,4 +139,4 @@ node --test tools/test_core.js
 
 Copyright © 2026 naromil. The original code, styles, tooling and documentation in this
 repository are released under the [MIT Licence](LICENSE). Question content you put in
-`questions/*.json` is yours to manage.
+`questions/` is yours to manage.

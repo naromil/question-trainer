@@ -110,19 +110,32 @@
   /* ------------------------------------------------------------------ *
    * Fixed JSON format
    *
-   * questions/index.json lists one file per set. Each set file is either the
-   * flat set object or a { "sets": [...] } wrapper:
+   * A set is a directory under questions/. questions/index.json lists the
+   * directory names:
+   *   { "sets": ["everyday-science", "photosynthesis"] }
+   *
+   * Each directory has its own index.json naming the unit files that make up
+   * the set:
+   *   { "id", "title", "description"?, "units": ["light.json", "calvin.json"] }
+   *
+   * A unit file has the shape a set file used to have:
    *   { "id", "title", "description"?, "questions": [
    *       { "id", "question", "choices": ["..."], "answer": <0-based index>,
    *         "passage"?, "image"?, "imageAlt"?, "imageCaption"?,
    *         "explanation"?, "explanations"?: ["..." | null] }
    *   ] }
    *
-   * One bad set is reported and skipped; the rest of the file still loads.
-   * app/app.js prefixes file-level errors with the file name.
+   * One bad unit is reported and skipped; the rest of the set still loads.
+   * app/app.js prefixes file-level errors with the path it fetched.
    * ------------------------------------------------------------------ */
   function text(value) {
     return typeof value === 'string' ? value.trim() : '';
+  }
+
+  /* Unit file names and set directory names are bare names: no directories,
+   * no "..", nothing a path traversal could use. */
+  function bareName(value) {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
   }
 
   /* Question images are stored as written. Bare paths are resolved against
@@ -196,23 +209,26 @@
     };
   }
 
-  function normalizeSet(raw, index) {
+  /* A unit file: an id, a title, and a non-empty question list. Question ids
+   * must be unique inside the unit; buildSet() widens that to the whole set,
+   * because progress is keyed by set id plus question id. */
+  function normalizeUnit(raw, index) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-      throw new Error('set ' + (index + 1) + ' must be an object');
+      throw new Error('unit ' + (index + 1) + ' must be an object');
     }
     var id = text(raw.id);
-    if (!id) throw new Error('set ' + (index + 1) + ' needs a non-empty string "id"');
+    if (!id) throw new Error('unit ' + (index + 1) + ' needs a non-empty string "id"');
     var title = text(raw.title);
-    if (!title) throw new Error('set "' + id + '" needs a non-empty "title"');
+    if (!title) throw new Error('unit "' + id + '" needs a non-empty "title"');
     if (!Array.isArray(raw.questions) || !raw.questions.length) {
-      throw new Error('set "' + id + '" needs a non-empty "questions" array');
+      throw new Error('unit "' + id + '" needs a non-empty "questions" array');
     }
 
     var seen = {};
     var questions = raw.questions.map(function (question, i) {
       var normalized = normalizeQuestion(question, i);
       if (seen[normalized.id]) {
-        throw new Error('set "' + id + '" has duplicate question id "' + normalized.id + '"');
+        throw new Error('unit "' + id + '" has duplicate question id "' + normalized.id + '"');
       }
       seen[normalized.id] = true;
       return normalized;
@@ -226,46 +242,155 @@
     };
   }
 
-  function normalizeBank(raw) {
-    var result = { sets: [], errors: [] };
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !Array.isArray(raw.sets)) {
-      result.errors.push({ message: 'The file must be an object with a "sets" array.' });
-      return result;
+  /* A set directory's index.json: who the set is and which files make it up. */
+  function normalizeFolder(raw, fallbackId) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('a set index must be an object');
     }
+    var id = text(raw.id) || text(fallbackId);
+    if (!id) throw new Error('the set index needs a non-empty string "id"');
+    var title = text(raw.title);
+    if (!title) throw new Error('set "' + id + '" needs a non-empty "title"');
+    if (!Array.isArray(raw.units) || !raw.units.length) {
+      throw new Error('set "' + id + '" needs a non-empty "units" array of file names');
+    }
+
     var seen = {};
-    raw.sets.forEach(function (rawSet, index) {
-      try {
-        var set = normalizeSet(rawSet, index);
-        if (seen[set.id]) throw new Error('duplicate set id "' + set.id + '"');
-        seen[set.id] = true;
-        result.sets.push(set);
-      } catch (err) {
-        result.errors.push({ index: index, message: 'Set ' + (index + 1) + ': ' + err.message });
+    var units = raw.units.map(function (value, i) {
+      var name = typeof value === 'string' ? value.trim() : '';
+      if (!bareName(name)) {
+        throw new Error('set "' + id + '" unit ' + (i + 1) + ' must be a bare file name');
       }
+      if (seen[name]) throw new Error('set "' + id + '" lists unit file "' + name + '" twice');
+      seen[name] = true;
+      return name;
     });
-    return result;
+
+    return { id: id, title: title, description: text(raw.description), units: units };
   }
 
-  function cloneSet(set) {
+  /* Assemble a set from its folder descriptor and the unit files that could be
+   * read. `entries` is [{ file, raw }] for a parsed unit, or [{ file, error }]
+   * when fetching/parsing it failed. Bad units are dropped with a message; a
+   * set with no usable unit is not a set at all. */
+  function buildSet(folder, entries) {
+    var errors = [];
+    var units = [];
+    var seenUnit = {};
+    var seenQuestion = {};
+
+    (entries || []).forEach(function (entry) {
+      var file = entry && entry.file ? entry.file : 'unit';
+      if (!entry || entry.raw === undefined || entry.raw === null) {
+        errors.push(file + ': ' + ((entry && entry.error) || 'could not be read'));
+        return;
+      }
+      try {
+        var unit = normalizeUnit(entry.raw, units.length);
+        if (seenUnit[unit.id]) {
+          throw new Error('duplicate unit id "' + unit.id + '" in the set');
+        }
+        unit.questions.forEach(function (question) {
+          if (seenQuestion[question.id]) {
+            throw new Error('duplicate question id "' + question.id + '" in the set');
+          }
+        });
+        seenUnit[unit.id] = true;
+        unit.questions.forEach(function (question) { seenQuestion[question.id] = true; });
+        units.push(unit);
+      } catch (err) {
+        errors.push(file + ': ' + err.message);
+      }
+    });
+
+    if (!units.length) {
+      errors.push('set "' + folder.id + '" has no usable unit');
+      return { set: null, errors: errors };
+    }
+    return {
+      set: {
+        id: folder.id,
+        title: folder.title,
+        description: folder.description,
+        units: units
+      },
+      errors: errors
+    };
+  }
+
+  /* Every set is a group of units. A flat set object from an older version
+   * (questions, no units) is treated as a set with one unit, so archived and
+   * restored copies from before the split keep working. */
+  function unitsOf(set) {
+    if (!set || typeof set !== 'object') return [];
+    if (Array.isArray(set.units) && set.units.length) return set.units;
+    if (Array.isArray(set.questions)) {
+      return [{
+        id: set.id,
+        title: set.title,
+        description: set.description || '',
+        questions: set.questions
+      }];
+    }
+    return [];
+  }
+
+  function unitOf(set, unitId) {
+    if (!unitId) return null;
+    var units = unitsOf(set);
+    for (var i = 0; i < units.length; i++) {
+      if (units[i].id === unitId) return units[i];
+    }
+    return null;
+  }
+
+  /* The questions a session draws from: one unit, or the whole set in unit
+   * order. Progress keys stay set id / question id either way. */
+  function questionsOf(set, unitId) {
+    if (unitId) {
+      var unit = unitOf(set, unitId);
+      return unit ? unit.questions : [];
+    }
+    return unitsOf(set).reduce(function (all, unit) {
+      return all.concat(unit.questions);
+    }, []);
+  }
+
+  function withUnits(set, units) {
     return {
       id: set.id,
       title: set.title,
       description: set.description || '',
-      questions: set.questions.map(function (question) {
-        return {
-          id: question.id,
-          passage: question.passage,
-          image: question.image,
-          imageAlt: question.imageAlt,
-          imageCaption: question.imageCaption,
-          question: question.question,
-          choices: question.choices.slice(),
-          answer: question.answer,
-          explanation: question.explanation,
-          explanations: question.explanations ? question.explanations.slice() : null
-        };
-      })
+      units: units
     };
+  }
+
+  function cloneQuestion(question) {
+    return {
+      id: question.id,
+      passage: question.passage,
+      image: question.image,
+      imageAlt: question.imageAlt,
+      imageCaption: question.imageCaption,
+      question: question.question,
+      choices: question.choices.slice(),
+      answer: question.answer,
+      explanation: question.explanation,
+      explanations: question.explanations ? question.explanations.slice() : null
+    };
+  }
+
+  function cloneUnit(unit) {
+    return {
+      id: unit.id,
+      title: unit.title,
+      description: unit.description || '',
+      questions: unit.questions.map(cloneQuestion)
+    };
+  }
+
+  function cloneSet(set) {
+    return withUnits(set, unitsOf(set).map(cloneUnit));
   }
 
   /* ------------------------------------------------------------------ *
@@ -282,6 +407,7 @@
       sets: {},
       local: {},
       archived: {},
+      archivedUnits: {},
       days: {},
       settings: {
         length: DEFAULT_SESSION_LENGTH,
@@ -293,13 +419,59 @@
     };
   }
 
+  /* A set snapshot may come from an older version, where a set was one flat
+   * object with questions. Both shapes sanitise to a set with units. */
+  function snapshotSet(raw) {
+    if (raw && typeof raw === 'object' && Array.isArray(raw.units) && raw.units.length) {
+      var id = text(raw.id);
+      if (!id) throw new Error('set snapshot without an id');
+      var seen = {};
+      var units = [];
+      raw.units.forEach(function (value, i) {
+        var unit = normalizeUnit(value, i);
+        if (seen[unit.id]) return;
+        seen[unit.id] = true;
+        units.push(unit);
+      });
+      if (!units.length) throw new Error('set snapshot without a unit');
+      return {
+        id: id,
+        title: text(raw.title) || id,
+        description: text(raw.description),
+        units: units
+      };
+    }
+    var single = normalizeUnit(raw, 0);
+    return {
+      id: single.id,
+      title: single.title,
+      description: single.description,
+      units: [single]
+    };
+  }
+
   function sanitizeArchived(entry, now) {
-    var set = normalizeSet(entry, 0);
+    var set = snapshotSet(entry);
     return {
       id: set.id,
       title: set.title,
       description: set.description,
-      questions: set.questions,
+      units: set.units,
+      kind: 'set',
+      archivedAt: typeof entry.archivedAt === 'number' ? entry.archivedAt : now
+    };
+  }
+
+  function sanitizeArchivedUnit(entry, now) {
+    var unit = normalizeUnit(entry, 0);
+    return {
+      id: unit.id,
+      title: unit.title,
+      description: unit.description,
+      questions: unit.questions,
+      kind: 'unit',
+      setId: text(entry.setId),
+      setTitle: text(entry.setTitle),
       archivedAt: typeof entry.archivedAt === 'number' ? entry.archivedAt : now
     };
   }
@@ -352,7 +524,7 @@
     if (raw.local && typeof raw.local === 'object') {
       Object.keys(raw.local).forEach(function (key) {
         try {
-          var set = normalizeSet(raw.local[key], 0);
+          var set = snapshotSet(raw.local[key]);
           state.local[set.id] = set;
         } catch (err) { /* drop an unusable restored copy */ }
       });
@@ -366,9 +538,23 @@
         } catch (err) { /* drop an unusable archive entry */ }
       });
     }
-    /* An archived set must never also be active. */
+
+    if (raw.archivedUnits && typeof raw.archivedUnits === 'object') {
+      Object.keys(raw.archivedUnits).forEach(function (key) {
+        try {
+          var unit = sanitizeArchivedUnit(raw.archivedUnits[key], now);
+          state.archivedUnits[unit.id] = unit;
+        } catch (err) { /* drop an unusable archived unit */ }
+      });
+    }
+
+    /* An archived set must never also be active, and a unit of an archived set
+     * is not separately archived. */
     Object.keys(state.local).forEach(function (id) {
       if (state.archived[id]) delete state.local[id];
+    });
+    Object.keys(state.archivedUnits).forEach(function (id) {
+      if (state.archived[state.archivedUnits[id].setId]) delete state.archivedUnits[id];
     });
 
     if (raw.days && typeof raw.days === 'object') {
@@ -554,12 +740,15 @@
    * ------------------------------------------------------------------ */
   function setStats(state, set, now) {
     now = now || Date.now();
+    var units = unitsOf(set);
     var row = {
       set: set,
       id: set.id,
       title: set.title,
       description: set.description,
-      total: set.questions.length,
+      units: units.length,
+      unitRows: units.map(function (unit) { return unitStats(state, set, unit, now); }),
+      total: 0,
       attempted: 0,
       correct: 0,
       correctFirstTry: 0,
@@ -567,7 +756,39 @@
       points: masteryOf(state, set.id),
       streak: (state.sets[set.id] || {}).streak || 0
     };
-    set.questions.forEach(function (question) {
+    row.unitRows.forEach(function (unitRow) {
+      row.total += unitRow.total;
+      row.attempted += unitRow.attempted;
+      row.correct += unitRow.correct;
+      row.correctFirstTry += unitRow.correctFirstTry;
+      row.due += unitRow.due;
+    });
+    row.accuracy = row.attempted
+      ? Math.round((row.correctFirstTry / row.attempted) * 100)
+      : 0;
+    row.tier = tierOf(row.points, row.attempted);
+    row.unseen = row.total - row.attempted;
+    row.archived = !!set.archivedAt;
+    return row;
+  }
+
+  /* One unit of a set. Mastery points stay a per-set total (that is what
+   * applyAnswer updates); a unit row reports coverage, first-try accuracy and
+   * what is due among its own questions. */
+  function unitStats(state, set, unit, now) {
+    now = now || Date.now();
+    var row = {
+      unit: unit,
+      id: unit.id,
+      title: unit.title,
+      setId: set.id,
+      total: unit.questions.length,
+      attempted: 0,
+      correct: 0,
+      correctFirstTry: 0,
+      due: 0
+    };
+    unit.questions.forEach(function (question) {
       var rec = recordFor(state, set.id, question.id);
       if (!rec || rec.a <= 0) return;
       row.attempted += 1;
@@ -578,9 +799,8 @@
     row.accuracy = row.attempted
       ? Math.round((row.correctFirstTry / row.attempted) * 100)
       : 0;
-    row.tier = tierOf(row.points, row.attempted);
+    row.coverage = row.total ? Math.round((row.attempted / row.total) * 100) : 0;
     row.unseen = row.total - row.attempted;
-    row.archived = !!set.archivedAt;
     return row;
   }
 
@@ -644,17 +864,20 @@
   function troubleSpots(state, sets, limit) {
     var rows = [];
     sets.forEach(function (set) {
-      set.questions.forEach(function (question) {
-        var rec = recordFor(state, set.id, question.id);
-        if (!rec || rec.a < 2) return;
-        var wrong = rec.a - rec.c;
-        if (!wrong) return;
-        rows.push({
-          set: set,
-          q: question,
-          attempts: rec.a,
-          correct: rec.c,
-          wrong: wrong
+      unitsOf(set).forEach(function (unit) {
+        unit.questions.forEach(function (question) {
+          var rec = recordFor(state, set.id, question.id);
+          if (!rec || rec.a < 2) return;
+          var wrong = rec.a - rec.c;
+          if (!wrong) return;
+          rows.push({
+            set: set,
+            unit: unit,
+            q: question,
+            attempts: rec.a,
+            correct: rec.c,
+            wrong: wrong
+          });
         });
       });
     });
@@ -664,12 +887,38 @@
     return rows.slice(0, limit || 10);
   }
 
+  /* Archiving a whole set freezes every unit. Unit-level archive entries for
+   * that set are absorbed into the snapshot, so restoring the set brings all
+   * its units back at once. */
   function archiveSet(state, set, now) {
     now = now || Date.now();
-    var snapshot = cloneSet(set);
+    var snapshot = withUnits(set, unitsOf(set).map(cloneUnit));
     snapshot.archivedAt = now;
+    snapshot.kind = 'set';
     state.archived[set.id] = snapshot;
     delete state.local[set.id];
+    Object.keys(state.archivedUnits || {}).forEach(function (unitId) {
+      if (state.archivedUnits[unitId].setId === set.id) delete state.archivedUnits[unitId];
+    });
+    state.updated = now;
+    return snapshot;
+  }
+
+  /* Archiving one unit hides it from the set and its practice/review links; the
+   * rest of the set stays active. */
+  function archiveUnit(state, set, unit, now) {
+    now = now || Date.now();
+    var snapshot = {
+      id: unit.id,
+      title: unit.title,
+      description: unit.description || '',
+      questions: unit.questions.map(cloneQuestion),
+      kind: 'unit',
+      setId: set.id,
+      setTitle: set.title,
+      archivedAt: now
+    };
+    state.archivedUnits[unit.id] = snapshot;
     state.updated = now;
     return snapshot;
   }
@@ -686,44 +935,98 @@
     return snapshot;
   }
 
+  /* Restore one archived unit. When the source set no longer has it (the folder
+   * lost the unit file, or the folder itself is gone), the unit is kept in a
+   * browser-local copy of the set, so the restore is never a dead end. */
+  function restoreUnit(state, unitId, sourceSet, now) {
+    now = now || Date.now();
+    var snapshot = state.archivedUnits[unitId];
+    if (!snapshot) return null;
+    delete state.archivedUnits[unitId];
+    var present = unitsOf(sourceSet).some(function (unit) { return unit.id === unitId; });
+    if (!present) {
+      var host = state.local[snapshot.setId];
+      if (!host) {
+        host = sourceSet ? cloneSet(sourceSet) : {
+          id: snapshot.setId,
+          title: snapshot.setTitle || snapshot.setId,
+          description: '',
+          units: []
+        };
+      }
+      host.units = unitsOf(host).filter(function (unit) { return unit.id !== unitId; });
+      host.units.push({
+        id: snapshot.id,
+        title: snapshot.title,
+        description: snapshot.description || '',
+        questions: snapshot.questions.map(cloneQuestion)
+      });
+      state.local[snapshot.setId] = host;
+    }
+    state.updated = now;
+    return snapshot;
+  }
+
+  /* Active sets in source order, with archived sets removed and archived units
+   * filtered out. A browser-local copy wins over the loaded source for the same
+   * set id, because it exists only for content the source no longer carries. */
   function activeSets(state, sourceSets) {
-    var out = [];
-    var seen = {};
+    var byId = {};
+    var order = [];
     (sourceSets || []).forEach(function (set) {
-      if (state.archived[set.id] || seen[set.id]) return;
-      seen[set.id] = true;
-      out.push(set);
+      if (!set || !set.id || byId[set.id]) return;
+      byId[set.id] = set;
+      order.push(set.id);
     });
     Object.keys(state.local || {}).forEach(function (id) {
-      if (state.archived[id] || seen[id]) return;
-      seen[id] = true;
-      out.push(state.local[id]);
+      if (!byId[id]) order.push(id);
+      byId[id] = state.local[id];
+    });
+
+    var out = [];
+    order.forEach(function (id) {
+      var set = byId[id];
+      if (!set || state.archived[id]) return;
+      var units = unitsOf(set);
+      var kept = units.filter(function (unit) { return !state.archivedUnits[unit.id]; });
+      if (!kept.length) return;
+      out.push(kept.length === units.length ? set : withUnits(set, kept));
     });
     return out;
   }
 
+  /* Everything in the archive, newest first: whole sets (kind 'set') and single
+   * units (kind 'unit'). */
   function archivedSets(state) {
-    return Object.keys(state.archived || {}).map(function (id) {
-      return state.archived[id];
-    }).sort(function (a, b) {
+    var out = [];
+    Object.keys(state.archived || {}).forEach(function (id) {
+      out.push(state.archived[id]);
+    });
+    Object.keys(state.archivedUnits || {}).forEach(function (id) {
+      out.push(state.archivedUnits[id]);
+    });
+    return out.sort(function (a, b) {
       return (b.archivedAt || 0) - (a.archivedAt || 0);
     });
   }
 
+  /* Every set that still has history worth reporting: active sets plus archived
+   * sets. Archived units are part of their set's history and are not added
+   * separately, or their questions would be counted twice. */
   function allSets(state, sourceSets) {
     var out = activeSets(state, sourceSets);
     var seen = {};
     out.forEach(function (set) { seen[set.id] = true; });
     archivedSets(state).forEach(function (set) {
-      if (seen[set.id]) return;
+      if (set.kind === 'unit' || seen[set.id]) return;
       seen[set.id] = true;
       out.push(set);
     });
     return out;
   }
 
-  /* A set for a session: active source first, then a restored local copy,
-   * then the frozen archived copy. */
+  /* A set for a session: active source or local copy first, then the frozen
+   * archived snapshot. */
   function findSet(state, sourceSets, setId) {
     var sets = activeSets(state, sourceSets);
     for (var i = 0; i < sets.length; i++) {
@@ -734,7 +1037,7 @@
 
   function dueCount(state, sets, now) {
     return (sets || []).reduce(function (n, set) {
-      return n + dueQuestions(state, set.id, set.questions, now).length;
+      return n + dueQuestions(state, set.id, questionsOf(set), now).length;
     }, 0);
   }
 
@@ -751,9 +1054,14 @@
     letterFor: letterFor,
     questionKey: questionKey,
     resolveImage: resolveImage,
-    normalizeBank: normalizeBank,
-    normalizeSet: normalizeSet,
+    normalizeFolder: normalizeFolder,
+    normalizeUnit: normalizeUnit,
+    buildSet: buildSet,
+    unitsOf: unitsOf,
+    unitOf: unitOf,
+    questionsOf: questionsOf,
     cloneSet: cloneSet,
+    cloneUnit: cloneUnit,
     emptyState: emptyState,
     sanitizeState: sanitizeState,
     sessionLength: sessionLength,
@@ -763,13 +1071,16 @@
     dueQuestions: dueQuestions,
     selectSession: selectSession,
     setStats: setStats,
+    unitStats: unitStats,
     allSetStats: allSetStats,
     overallStats: overallStats,
     activity: activity,
     streak: streak,
     troubleSpots: troubleSpots,
     archiveSet: archiveSet,
+    archiveUnit: archiveUnit,
     restoreSet: restoreSet,
+    restoreUnit: restoreUnit,
     activeSets: activeSets,
     archivedSets: archivedSets,
     allSets: allSets,

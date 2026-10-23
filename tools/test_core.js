@@ -41,11 +41,32 @@ function rawSet(overrides) {
   }, overrides);
 }
 
-function load(...sets) {
-  const result = C.normalizeBank({ sets });
-  assert.deepEqual(result.errors, [], JSON.stringify(result.errors));
-  return result.sets;
+function load(...units) {
+  /* Run the real pipeline: a folder descriptor plus the unit files it lists.
+   * One unit in, one unit out, so the older assertions keep their shape. */
+  const raws = units.length ? units : [rawSet()];
+  const folder = C.normalizeFolder({
+    id: raws[0].id,
+    title: raws[0].title,
+    units: raws.map((_, i) => `unit-${i}.json`)
+  }, raws[0].id);
+  const built = C.buildSet(folder, raws.map((raw, i) => ({ file: `unit-${i}.json`, raw })));
+  assert.deepEqual(built.errors, [], JSON.stringify(built.errors));
+  return built.set.units;
 }
+
+function loadSet(...units) {
+  const raws = units.length ? units : [rawSet()];
+  const folder = C.normalizeFolder({
+    id: 'set-1',
+    title: 'Set One',
+    units: raws.map((_, i) => `unit-${i}.json`)
+  }, 'set-1');
+  const built = C.buildSet(folder, raws.map((raw, i) => ({ file: `unit-${i}.json`, raw })));
+  assert.deepEqual(built.errors, [], JSON.stringify(built.errors));
+  return built.set;
+}
+
 
 function seqRng(values) {
   let i = 0;
@@ -119,7 +140,7 @@ test('sanitizeState: keeps known lengths and migrates practiceAll', () => {
 
 /* ------------------------------------------------------------- the format */
 
-test('normalizeBank: accepts the fixed format and applies defaults', () => {
+test('normalizeUnit: accepts the fixed format and applies defaults', () => {
   const sets = load(rawSet({
     questions: [
       question({ id: 'q1' }),
@@ -146,7 +167,7 @@ test('normalizeBank: accepts the fixed format and applies defaults', () => {
   assert.equal(set.questions[0].imageCaption, '');
 });
 
-test('normalizeBank: trims and keeps the question image fields', () => {
+test('normalizeUnit: trims and keeps the question image fields', () => {
   const sets = load(rawSet({
     questions: [question({
       image: '  images/australia-map.png  ',
@@ -160,18 +181,24 @@ test('normalizeBank: trims and keeps the question image fields', () => {
   assert.equal(q.imageCaption, 'Canberra is in the ACT.');
 });
 
-test('cloneSet: keeps the question image fields', () => {
-  const set = load(rawSet({
+test('cloneSet: keeps every unit and the question image fields', () => {
+  const set = loadSet(rawSet({
+    id: 'u1',
+    title: 'Unit One',
     questions: [question({
       image: 'images/australia-map.png',
       imageAlt: 'Map of Australia.',
       imageCaption: 'Canberra is marked.'
     })]
-  }))[0];
+  }), rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] }));
   const copy = C.cloneSet(set);
-  assert.equal(copy.questions[0].image, 'images/australia-map.png');
-  assert.equal(copy.questions[0].imageAlt, 'Map of Australia.');
-  assert.equal(copy.questions[0].imageCaption, 'Canberra is marked.');
+  assert.equal(copy.units.length, 2);
+  assert.equal(copy.units[1].title, 'Unit Two');
+  assert.equal(copy.units[0].questions[0].image, 'images/australia-map.png');
+  assert.equal(copy.units[0].questions[0].imageAlt, 'Map of Australia.');
+  assert.equal(copy.units[0].questions[0].imageCaption, 'Canberra is marked.');
+  copy.units[0].questions[0].choices[0] = 'changed';
+  assert.equal(set.units[0].questions[0].choices[0], 'Alpha', 'the clone is independent');
 });
 
 test('resolveImage: resolves bare paths and rejects script schemes', () => {
@@ -190,77 +217,122 @@ test('resolveImage: resolves bare paths and rejects script schemes', () => {
   assert.equal(C.resolveImage('', base), '');
 });
 
-test('normalizeBank: reports one bad set and keeps the rest', () => {
-  const result = C.normalizeBank({
-    sets: [
-      rawSet({ id: 'good', questions: [question()] }),
-      rawSet({ id: 'bad', questions: [question({ answer: 9 })] })
-    ]
-  });
-  assert.deepEqual(result.sets.map((set) => set.id), ['good']);
+test('buildSet: reports one bad unit and keeps the rest of the set', () => {
+  const folder = C.normalizeFolder({ id: 's', title: 'S', units: ['a.json', 'b.json'] }, 's');
+  const result = C.buildSet(folder, [
+    { file: 'a.json', raw: rawSet({ id: 'good', questions: [question()] }) },
+    { file: 'b.json', raw: rawSet({ id: 'bad', questions: [question({ answer: 9 })] }) }
+  ]);
+  assert.equal(result.set.units.length, 1);
+  assert.equal(result.set.units[0].id, 'good');
   assert.equal(result.errors.length, 1);
-  assert.match(result.errors[0].message, /0-based choice index/);
+  assert.match(result.errors[0], /^b\.json: /);
+  assert.match(result.errors[0], /0-based choice index/);
 });
 
-test('normalizeBank: rejects duplicate ids and malformed questions', () => {
-  const duplicateSet = C.normalizeBank({
-    sets: [rawSet({ id: 'same' }), rawSet({ id: 'same' })]
-  });
-  assert.equal(duplicateSet.sets.length, 1);
-  assert.match(duplicateSet.errors[0].message, /duplicate set id/);
-
-  const duplicateQuestion = C.normalizeBank({
-    sets: [rawSet({ questions: [question({ id: 'q1' }), question({ id: 'q1' })] })]
-  });
-  assert.match(duplicateQuestion.errors[0].message, /duplicate question id/);
-
-  const badChoices = C.normalizeBank({
-    sets: [rawSet({ questions: [question({ choices: ['Only one'] })] })]
-  });
-  assert.match(badChoices.errors[0].message, /at least two "choices"/);
-
-  const badExplanation = C.normalizeBank({
-    sets: [rawSet({ questions: [question({ explanations: ['one'] })] })]
-  });
-  assert.match(badExplanation.errors[0].message, /one entry per choice/);
+test('buildSet: a set with no usable unit is not a set', () => {
+  const folder = C.normalizeFolder({ id: 's', title: 'S', units: ['a.json'] }, 's');
+  const result = C.buildSet(folder, [{ file: 's/a.json', error: 'HTTP 404 Not Found' }]);
+  assert.equal(result.set, null);
+  assert.match(result.errors[0], /HTTP 404/);
+  assert.match(result.errors[1], /no usable unit/);
 });
 
-test('normalizeBank: rejects a non-bank object', () => {
-  const result = C.normalizeBank({ nope: true });
-  assert.equal(result.sets.length, 0);
-  assert.match(result.errors[0].message, /"sets" array/);
+test('buildSet: rejects duplicate unit ids and question ids across units', () => {
+  const folder = C.normalizeFolder({ id: 's', title: 'S', units: ['a.json', 'b.json'] }, 's');
+
+  const duplicateUnit = C.buildSet(folder, [
+    { file: 'a.json', raw: rawSet({ id: 'same' }) },
+    { file: 'b.json', raw: rawSet({ id: 'same' }) }
+  ]);
+  assert.equal(duplicateUnit.set.units.length, 1);
+  assert.match(duplicateUnit.errors[0], /duplicate unit id/);
+
+  const duplicateQuestion = C.buildSet(folder, [
+    { file: 'a.json', raw: rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }) },
+    { file: 'b.json', raw: rawSet({ id: 'u2', questions: [question({ id: 'q1' })] }) }
+  ]);
+  assert.equal(duplicateQuestion.set.units.length, 1,
+    'a question id must not repeat inside one set');
+  assert.match(duplicateQuestion.errors[0], /duplicate question id/);
 });
 
-test('questions/index.json and its set files are valid fixed-format data', () => {
+test('buildSet: rejects malformed questions inside a unit', () => {
+  const folder = C.normalizeFolder({ id: 's', title: 'S', units: ['a.json'] }, 's');
+  const bad = (questions) => C.buildSet(folder, [
+    { file: 'a.json', raw: rawSet({ questions }) }
+  ]).errors[0];
+
+  assert.match(bad([question({ choices: ['Only one'] })]), /at least two "choices"/);
+  assert.match(bad([question({ explanations: ['one'] })]), /one entry per choice/);
+  assert.match(bad([question({ id: 'q1' }), question({ id: 'q1' })]),
+    /duplicate question id/);
+});
+
+test('normalizeFolder: validates the set directory index', () => {
+  const base = { id: 's', title: 'S', units: ['a.json'] };
+  assert.deepEqual(C.normalizeFolder(base, 'fallback'),
+    { id: 's', title: 'S', description: '', units: ['a.json'] });
+  assert.equal(C.normalizeFolder({ title: 'S', units: ['a.json'] }, 'folder-name').id,
+    'folder-name', 'the id defaults to the folder name');
+
+  assert.throws(() => C.normalizeFolder([], 's'), /must be an object/);
+  assert.throws(() => C.normalizeFolder({ nope: true }, 's'), /needs a non-empty "title"/);
+  assert.throws(() => C.normalizeFolder({ id: 's', units: ['a.json'] }, 's'),
+    /needs a non-empty "title"/);
+  assert.throws(() => C.normalizeFolder({ id: 's', title: 'S' }, 's'),
+    /"units" array/);
+  assert.throws(() => C.normalizeFolder({ id: 's', title: 'S', units: [] }, 's'),
+    /"units" array/);
+  assert.throws(() => C.normalizeFolder({ id: 's', title: 'S', units: ['../a.json'] }, 's'),
+    /bare file name/);
+  assert.throws(() => C.normalizeFolder({ id: 's', title: 'S', units: ['a.json', 'a.json'] }, 's'),
+    /twice/);
+});
+
+test('questions/index.json and its set folders are valid fixed-format data', () => {
   const root = path.join(__dirname, '..', 'questions');
   const index = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8'));
-  assert.ok(Array.isArray(index.files));
-  assert.ok(index.files.length >= 2);
+  assert.ok(Array.isArray(index.sets));
+  assert.ok(index.sets.length >= 2);
 
   const sets = [];
-  index.files.forEach((name) => {
-    assert.ok(!name.includes('/') && !name.includes('\\'), `${name} is not a bare file name`);
-    const raw = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
-    const bank = Array.isArray(raw.sets)
-      ? C.normalizeBank(raw)
-      : { sets: [C.normalizeSet(raw, 0)], errors: [] };
-    assert.deepEqual(bank.errors, [], `${name}: ${JSON.stringify(bank.errors)}`);
-    sets.push(...bank.sets);
+  index.sets.forEach((name) => {
+    assert.ok(!name.includes('/') && !name.includes('\\'), `${name} is not a folder name`);
+    const folder = JSON.parse(fs.readFileSync(path.join(root, name, 'index.json'), 'utf8'));
+    const descriptor = C.normalizeFolder(folder, name);
+    const entries = descriptor.units.map((file) => ({
+      file: `${name}/${file}`,
+      raw: JSON.parse(fs.readFileSync(path.join(root, name, file), 'utf8'))
+    }));
+    const built = C.buildSet(descriptor, entries);
+    assert.deepEqual(built.errors, [], `${name}: ${JSON.stringify(built.errors)}`);
+    sets.push(built.set);
   });
 
   assert.ok(sets.length >= 2);
   assert.equal(new Set(sets.map((set) => set.id)).size, sets.length, 'set ids are unique');
+
+  let multiUnitSets = 0;
   sets.forEach((set) => {
-    assert.ok(set.questions.length > 0);
-    set.questions.forEach((item) => {
-      assert.ok(item.choices.length >= 2);
-      assert.ok(item.answer >= 0 && item.answer < item.choices.length);
-      if (item.image && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(item.image)) {
-        assert.ok(fs.existsSync(path.join(root, item.image)),
-          `${set.id}/${item.id}: image ${item.image} is missing`);
-      }
+    assert.ok(set.units.length > 0);
+    if (set.units.length > 1) multiUnitSets += 1;
+    const seen = new Set();
+    set.units.forEach((unit) => {
+      assert.ok(unit.questions.length > 0, `${set.id}/${unit.id} has no questions`);
+      assert.ok(!seen.has(unit.id), `duplicate unit id ${unit.id}`);
+      seen.add(unit.id);
+      unit.questions.forEach((item) => {
+        assert.ok(item.choices.length >= 2);
+        assert.ok(item.answer >= 0 && item.answer < item.choices.length);
+        if (item.image && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(item.image)) {
+          assert.ok(fs.existsSync(path.join(root, item.image)),
+            `${set.id}/${item.id}: image ${item.image} is missing`);
+        }
+      });
     });
   });
+  assert.ok(multiUnitSets >= 1, 'at least one shipped set is made of several units');
 });
 
 test('letterFor and questionKey: labels and progress keys are unambiguous', () => {
@@ -408,6 +480,65 @@ test('selectSession: practice is deterministic under a seeded rng', () => {
   assert.deepEqual(run(), run());
 });
 
+/* ------------------------------------------------------- sets and units */
+
+test('unitsOf/unitOf/questionsOf: a set is the union of its units', () => {
+  const set = loadSet(
+    rawSet({
+      id: 'u1', title: 'Unit One',
+      questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+    }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q3' })] })
+  );
+  assert.deepEqual(C.unitsOf(set).map((unit) => unit.id), ['u1', 'u2']);
+  assert.equal(C.unitOf(set, 'u2').title, 'Unit Two');
+  assert.equal(C.unitOf(set, 'nope'), null);
+  assert.deepEqual(C.questionsOf(set).map((item) => item.id), ['q1', 'q2', 'q3']);
+  assert.deepEqual(C.questionsOf(set, 'u2').map((item) => item.id), ['q3']);
+  assert.deepEqual(C.questionsOf(set, 'nope'), []);
+});
+
+test('a unit session still keys progress by set id plus question id', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  const picked = C.selectSession(state, set.id, C.questionsOf(set, 'u2'), {
+    mode: 'practice', length: 5, now: NOW
+  });
+  assert.deepEqual(picked.map((item) => item.id), ['q2']);
+
+  C.applyAnswer(state, set.id, picked[0], 1, NOW);
+  assert.ok(state.q[C.questionKey('set-1', 'q2')], 'stored under the set id');
+  assert.equal(state.sets['set-1'].points, C.MASTERY.firstCorrect);
+});
+
+test('unitStats and setStats: units are reported inside the set', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' }), question({ id: 'q2' })] }),
+    rawSet({ id: 'u2', questions: [question({ id: 'q3' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[0], 1, NOW); // first try
+  C.applyAnswer(state, set.id, set.units[1].questions[0], 0, NOW); // miss
+
+  const unit = C.unitStats(state, set, set.units[0], NOW);
+  assert.equal(unit.total, 2);
+  assert.equal(unit.attempted, 1);
+  assert.equal(unit.accuracy, 100);
+  assert.equal(unit.coverage, 50);
+  assert.equal(unit.due, 0);
+
+  const row = C.setStats(state, set, NOW);
+  assert.equal(row.units, 2);
+  assert.equal(row.total, 3);
+  assert.equal(row.attempted, 2);
+  assert.equal(row.unitRows.length, 2);
+  assert.equal(row.due, 1, 'the miss is due immediately');
+  assert.equal(row.accuracy, 50);
+});
+
 /* --------------------------------------------------------------- archive */
 
 test('archiveSet/restoreSet: hide a set, keep its copy, restore it', () => {
@@ -435,7 +566,7 @@ test('restoreSet: keeps a browser-local copy when the source set is gone', () =>
   assert.deepEqual(C.archivedSets(state), []);
   assert.equal(state.local['set-1'].title, 'Set One');
   assert.deepEqual(C.activeSets(state, []).map((item) => item.id), ['set-1']);
-  assert.equal(C.findSet(state, [], 'set-1').questions[0].answer, 1);
+  assert.equal(C.findSet(state, [], 'set-1').units[0].questions[0].answer, 1);
 });
 
 test('allSets: includes archived copies without duplicating active sets', () => {
@@ -445,6 +576,71 @@ test('allSets: includes archived copies without duplicating active sets', () => 
   C.archiveSet(state, set, NOW);
   assert.deepEqual(C.allSets(state, [set]).map((item) => item.id), ['set-1']);
   assert.equal(C.allSets(state, [set])[0].archivedAt, NOW);
+});
+
+/* -------------------------------------------------------- unit archives */
+
+test('archiveUnit: hides one unit and keeps the rest of the set', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', title: 'Unit One', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, set, set.units[0], NOW);
+
+  const active = C.activeSets(state, [set]);
+  assert.equal(active.length, 1, 'the set stays on the list');
+  assert.deepEqual(active[0].units.map((unit) => unit.id), ['u2']);
+  assert.deepEqual(C.archivedSets(state).map((entry) => entry.id), ['u1']);
+  assert.equal(C.archivedSets(state)[0].kind, 'unit');
+  assert.equal(C.archivedSets(state)[0].setTitle, 'Set One');
+
+  C.restoreUnit(state, 'u1', set, NOW + 1);
+  assert.deepEqual(C.archivedSets(state), []);
+  assert.deepEqual(C.activeSets(state, [set])[0].units.map((unit) => unit.id), ['u1', 'u2']);
+  assert.deepEqual(state.local, {}, 'the source still has the unit, so no local copy is needed');
+});
+
+test('archiveUnit: the set leaves the list when every unit is archived', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, set, set.units[0], NOW);
+  assert.equal(C.activeSets(state, [set]).length, 1);
+  C.archiveUnit(state, set, set.units[1], NOW);
+  assert.deepEqual(C.activeSets(state, [set]), []);
+  assert.equal(C.archivedSets(state).length, 2);
+});
+
+test('archiveSet: absorbs the unit archives of the same set', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, set, set.units[0], NOW);
+  C.archiveSet(state, set, NOW + 1);
+  assert.deepEqual(state.archivedUnits, {});
+  assert.deepEqual(C.archivedSets(state).map((entry) => entry.kind), ['set']);
+  assert.equal(C.archivedSets(state)[0].units.length, 2);
+});
+
+test('restoreUnit: keeps a browser-local copy when the source lost the unit', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, set, set.units[1], NOW);
+
+  const shrunk = loadSet(rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }));  // same set id, unit file removed
+  C.restoreUnit(state, 'u2', shrunk, NOW + 1);
+
+  assert.deepEqual(C.archivedSets(state), []);
+  assert.equal(state.local['set-1'].units.length, 2);
+  assert.deepEqual(C.activeSets(state, [shrunk])[0].units.map((unit) => unit.id), ['u1', 'u2']);
 });
 
 /* -------------------------------------------------------- state handling */
@@ -504,6 +700,43 @@ test('sanitizeState: clamps nonsense records instead of trusting them', () => {
   assert.equal(state.settings.sound, false);
   assert.equal(state.settings.practiceAll, true);
   assert.deepEqual(state.totals, { a: 2, c: 2, sessions: 0 });
+});
+
+test('sanitizeState: a legacy flat archive becomes a one-unit set', () => {
+  const state = C.sanitizeState({
+    app: C.STATE_APP, v: 1, q: {}, sets: {}, local: {}, days: {},
+    archived: {
+      old: {
+        id: 'old', title: 'Old Set', archivedAt: 5,
+        questions: [question({ id: 'q1' })]
+      }
+    },
+    totals: { a: 0, c: 0, sessions: 0 }
+  }, NOW);
+
+  assert.equal(state.archived.old.kind, 'set');
+  assert.equal(state.archived.old.units.length, 1);
+  assert.equal(state.archived.old.units[0].questions[0].id, 'q1');
+  assert.equal(state.archivedUnits && Object.keys(state.archivedUnits).length, 0);
+});
+
+test('sanitizeState: keeps unit archives but drops those of an archived set', () => {
+  const unit = { id: 'u1', title: 'U1', questions: [question({ id: 'q1' })] };
+  const base = { app: C.STATE_APP, v: 1, q: {}, sets: {}, local: {}, days: {},
+    totals: { a: 0, c: 0, sessions: 0 } };
+
+  const kept = C.sanitizeState(Object.assign({}, base, {
+    archivedUnits: { u1: Object.assign({ setId: 's', setTitle: 'S', archivedAt: 9 }, unit) }
+  }), NOW);
+  assert.equal(kept.archivedUnits.u1.title, 'U1');
+  assert.equal(kept.archivedUnits.u1.kind, 'unit');
+
+  const absorbed = C.sanitizeState(Object.assign({}, base, {
+    archived: { s: { id: 's', title: 'S', units: [unit], archivedAt: 5 } },
+    archivedUnits: { u1: Object.assign({ setId: 's', setTitle: 'S', archivedAt: 9 }, unit) }
+  }), NOW);
+  assert.deepEqual(absorbed.archivedUnits, {});
+  assert.equal(absorbed.archived.s.units.length, 1);
 });
 
 test('streak: counts back from today, tolerating an untouched today', () => {

@@ -189,16 +189,66 @@ kbd {
   color: var(--ink-3); font-size: .78rem; letter-spacing: .1em; text-transform: uppercase;
   margin-bottom: .55rem;
 }
-.sets { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .75rem; }
-.set-card { display: flex; flex-direction: column; gap: .5rem; }
-.set-card h3 { margin: 0; font-size: 1rem; line-height: 1.3; }
+/* Set cards are long rows, one set per line, not square tiles. A set made of
+   several units adds a units panel on the right of the same card. */
+.sets { display: flex; flex-direction: column; gap: .75rem; }
+.sets > .set-card + .set-card { margin-top: 0; }
+.set-card {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.1rem; align-items: start;
+}
+.set-card[data-multi] { grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); }
+.set-card .set-main { display: flex; flex-direction: column; gap: .5rem; min-width: 0; }
+/* A one-unit set has the whole card to itself: keep the text on the left and
+   park the three buttons at the right of the meta line, so the card reads as a
+   row instead of a stretched tile. */
+.set-card:not([data-multi]) .set-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "head head" "desc desc" "bar bar" "meta actions";
+  align-items: center; column-gap: 1.5rem; row-gap: .45rem;
+}
+.set-card:not([data-multi]) .set-main > .spread { grid-area: head; }
+.set-card:not([data-multi]) .set-main > p,
+.set-card:not([data-multi]) .set-main > .set-text { grid-area: desc; max-width: 78ch; }
+.set-card:not([data-multi]) .set-main > .set-text p:last-child { margin-bottom: 0; }
+.set-card:not([data-multi]) .set-main > .bar { grid-area: bar; }
+.set-card:not([data-multi]) .set-main > .meta { grid-area: meta; }
+.set-card:not([data-multi]) .set-main > .set-actions {
+  grid-area: actions; justify-content: flex-end; margin-top: 0;
+}
+.set-card h3 { margin: 0; font-size: 1.05rem; line-height: 1.3; }
 .set-card .meta { font-size: .8rem; color: var(--ink-3); }
+.set-card .set-actions { margin-top: .35rem; }
+
+/* Units panel: each unit carries the same three options as its set. */
+.set-units { border-left: 1px solid var(--line); padding-left: 1.1rem; min-width: 0; }
+.set-units > h4 { margin-bottom: .5rem; }
+.unit-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .7rem; }
+.unit-row {
+  display: flex; flex-direction: column; gap: .3rem;
+  padding-bottom: .7rem; border-bottom: 1px dashed var(--line);
+}
+.unit-row:last-child { border-bottom: none; padding-bottom: 0; }
+.unit-head { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }
+.unit-head b { font-size: .95rem; }
+.unit-row .meta { font-size: .78rem; color: var(--ink-3); }
+.unit-bar { height: 5px; }
+.unit-actions { gap: .35rem; }
+.unit-actions .btn { padding: .2rem .65rem; font-size: .78rem; }
+.tag.units { background: var(--blue-soft); color: var(--blue); border-color: transparent; }
 
 /* ---------------------------------------------------------------- practice */
 /* Answering view is capped at ~78% of the 1000px shell (780px) so stems and
    choices read at a comfortable line length; other routes stay full width. */
 .practice-view { max-width: 780px; margin: 0 auto; }
 .prac-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .8rem; }
+/* A set plus a unit title can be long: keep it on one line and let it truncate
+   so the dots and the timer stay on the same row. */
+.prac-head .head-title {
+  min-width: 0; flex: 1 1 auto; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.prac-head .dots { flex: 1 1 120px; }
 .dots { display: flex; gap: 5px; flex: 1; min-width: 120px; }
 .dot { width: 100%; height: 6px; border-radius: 999px; background: var(--line); }
 .dot.correct { background: var(--green); }
@@ -377,6 +427,15 @@ select, input[type="number"] {
 }
 textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radius: 8px;
   border: 1px solid var(--line-2); background: var(--card); color: var(--ink); padding: .5rem; }
+
+@media (max-width: 860px) {
+  /* Stack the units panel under the set instead of squeezing both columns. */
+  .set-card[data-multi] { grid-template-columns: minmax(0, 1fr); }
+  .set-units {
+    border-left: none; border-top: 1px solid var(--line);
+    padding-left: 0; padding-top: .9rem;
+  }
+}
 
 @media (max-width: 620px) {
   h1 { font-size: 1.35rem; }
