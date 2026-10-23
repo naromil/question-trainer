@@ -343,6 +343,16 @@ test('letterFor and questionKey: labels and progress keys are unambiguous', () =
   assert.equal(C.questionKey('s', 'q'), C.questionKey('s', 'q'));
 });
 
+test('choicesFor: every question ends with an "I don\'t know" choice', () => {
+  const [set] = load(rawSet());
+  const q = set.questions[0];
+  const choices = C.choicesFor(q);
+  assert.deepEqual(q.choices, ['Alpha', 'Bravo', 'Charlie', 'Delta'],
+    'the authored question data stays as written');
+  assert.deepEqual(choices, ['Alpha', 'Bravo', 'Charlie', 'Delta', "I don't know"]);
+  assert.equal(C.letterFor(choices.length - 1), 'E');
+});
+
 /* ---------------------------------------------------------------- grading */
 
 test('applyAnswer: first-try correct earns full mastery and schedules review', () => {
@@ -393,6 +403,27 @@ test('applyAnswer: a miss costs mastery and makes the item due immediately', () 
   assert.equal(rec.box, 0);
   assert.equal(rec.due, NOW);
   assert.equal(rec.f, 0);
+});
+
+test('applyAnswer: the "I don\'t know" choice is always a miss', () => {
+  const [set] = load(rawSet());
+  const state = C.emptyState(NOW);
+  const q = set.questions[0];
+  const dontKnow = C.choicesFor(q).length - 1;
+  C.applyAnswer(state, set.id, q, 1, NOW); // right once, so a later miss is visible
+  const result = C.applyAnswer(state, set.id, q, dontKnow, NOW + DAY);
+
+  assert.equal(result.correct, false);
+  assert.equal(result.chosen, 'E');
+  assert.equal(result.expected, 'B');
+  assert.equal(result.coin, 'miss');
+  assert.equal(result.firstCorrect, false);
+  assert.equal(result.boxAfter, 0);
+  assert.equal(result.pointsDelta, C.MASTERY.wrong);
+  const rec = state.q[C.questionKey(set.id, 'q1')];
+  assert.equal(rec.a, 2);
+  assert.equal(rec.c, 1);
+  assert.equal(rec.f, 1, 'the first answer stays the one that decides first-try accuracy');
 });
 
 test('SRS: correct answers walk box 1 -> 2 -> 3 -> 4 and then hold', () => {

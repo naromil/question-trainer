@@ -106,14 +106,14 @@ right of its card, each with its own practice, review and archive.
 |---|---|---|---|
 | `id` | string | yes | Stable, non-empty identifier, unique **across all units of the set**. Progress is keyed by set id plus question id. |
 | `question` | string | yes | The question stem. |
-| `choices` | array of strings | yes | At least two non-empty choices. Labels A, B, C … are generated from the order. |
-| `answer` | integer | yes | **0-based** index of the correct choice. `0` is the first choice, `1` the second, and so on. |
+| `choices` | array of strings | yes | At least two non-empty choices. Labels A, B, C … are generated from the order. The app appends one more choice, **I don't know**, after the last authored choice; it is not part of the data and is always graded wrong. |
+| `answer` | integer | yes | **0-based** index of the correct choice. `0` is the first choice, `1` the second, and so on. It always refers to the authored `choices`; the automatic `I don't know` choice can never be the answer. |
 | `passage` | string | no | Context shown above the stem. Blank lines separate paragraphs; lines starting with a bullet become list items. |
 | `image` | string | no | Image shown between the passage and the stem. A bare path is relative to the `questions/` directory; an absolute URL or a `data:` URI also works. |
 | `imageAlt` | string | no | Text alternative for the image. Recommended whenever `image` is set; without it the image has no accessible name. |
 | `imageCaption` | string | no | Visible caption shown under the image. |
 | `explanation` | string | no | Overall explanation shown after the answer is checked. |
-| `explanations` | array | no | One entry per choice, in the same order as `choices`. Each entry is a string or `null`; `null` and empty strings render nothing under that choice. |
+| `explanations` | array | no | One entry per authored choice, in the same order as `choices`. Each entry is a string or `null`; `null` and empty strings render nothing under that choice. |
 
 All strings are trimmed when the files are loaded. Empty optional strings are
 treated as absent.
@@ -171,9 +171,10 @@ The loader applies the same rules as `app/core.js`:
   bare file names, without duplicates;
 * a unit needs non-empty `id`, `title` and `questions`;
 * a question needs non-empty `id` and `question`, at least two non-empty
-  choices, and an integer `answer` in `[0, choices.length)`;
+  choices, and an integer `answer` in `[0, choices.length)` (the automatic
+  `I don't know` choice is appended by the app and is never part of `choices`);
 * `explanations`, when present, must contain exactly one string-or-null entry
-  per choice;
+  per authored choice;
 * ids must be unique: unit ids and question ids within their set, set ids across
   the whole bank.
 

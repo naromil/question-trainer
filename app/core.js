@@ -88,6 +88,15 @@
     return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
   }
 
+  /* Every question also offers "I don't know" after its authored choices. It is
+   * not part of the question data, and it can never be the correct answer:
+   * applyAnswer() treats it as a miss. */
+  var DONT_KNOW_CHOICE = "I don't know";
+
+  function choicesFor(question) {
+    return question.choices.concat([DONT_KNOW_CHOICE]);
+  }
+
   /* Choice labels are derived from the index: 0 -> A, 25 -> Z, 26 -> AA. */
   function letterFor(index) {
     var n = (index | 0) + 1;
@@ -616,7 +625,9 @@
   function applyAnswer(state, setId, question, choiceIndex, now) {
     now = now || Date.now();
     var key = questionKey(setId, question.id);
-    var correct = choiceIndex === question.answer;
+    /* The appended "I don't know" choice sits past the authored choices; the
+     * bound keeps it wrong even if a question's answer index were set to it. */
+    var correct = choiceIndex === question.answer && choiceIndex < question.choices.length;
     var chosen = letterFor(choiceIndex);
     var expected = letterFor(question.answer);
     var before = state.q[key] || null;
@@ -1108,8 +1119,10 @@
     SESSION_LENGTHS: SESSION_LENGTHS,
     DEFAULT_SESSION_LENGTH: DEFAULT_SESSION_LENGTH,
     DAY_MS: DAY_MS,
+    DONT_KNOW_CHOICE: DONT_KNOW_CHOICE,
     dayKey: dayKey,
     letterFor: letterFor,
+    choicesFor: choicesFor,
     questionKey: questionKey,
     resolveImage: resolveImage,
     normalizeFolder: normalizeFolder,

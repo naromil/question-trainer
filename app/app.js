@@ -1113,7 +1113,7 @@
     });
     renderDots();
 
-    var choices = question.choices.map(function (text, i) {
+    var choices = C.choicesFor(question).map(function (text, i) {
       return '<li class="choice-item" style="--i:' + i + '">' +
         choiceHTML(i, question, text) + '</li>';
     }).join('');
@@ -1226,7 +1226,7 @@
 
   /* Read-only rendering of a question, used in review lists. */
   function staticQuestionHTML(question) {
-    var choices = question.choices.map(function (text, i) {
+    var choices = C.choicesFor(question).map(function (text, i) {
       var letter = letterFor(i);
       var cls = i === question.answer ? ' is-correct' : ' dimmed';
       return '<li class="choice-item"><div class="choice-row is-static' + cls + '">' +
@@ -1759,9 +1759,12 @@
         'keep progress attached when you edit the file.</td></tr>' +
       '<tr><td><code>question</code></td><td>required</td><td>The question stem.</td></tr>' +
       '<tr><td><code>choices</code></td><td>required</td><td>Two or more choice strings. ' +
-        'Labels A, B, C … are generated from their order.</td></tr>' +
+        'Labels A, B, C … are generated from their order. The app appends a final ' +
+        '<b>I don\'t know</b> choice, which is always graded wrong and is not part of ' +
+        'the JSON.</td></tr>' +
       '<tr><td><code>answer</code></td><td>required</td><td>0-based index of the correct ' +
-        'choice. The example answer <code>1</code> means the second choice.</td></tr>' +
+        'authored choice. The example answer <code>1</code> means the second choice. ' +
+        'The automatic <b>I don\'t know</b> choice can never be the answer.</td></tr>' +
       '<tr><td><code>passage</code></td><td>optional</td><td>Context shown above the question. ' +
         'Blank lines separate paragraphs; lines starting with • become a list.</td></tr>' +
       '<tr><td><code>image</code></td><td>optional</td><td>Image shown between the passage ' +
@@ -1773,8 +1776,9 @@
         'image.</td></tr>' +
       '<tr><td><code>explanation</code></td><td>optional</td><td>Overall explanation shown ' +
         'after answering.</td></tr>' +
-      '<tr><td><code>explanations</code></td><td>optional</td><td>One entry per choice ' +
-        '(string or <code>null</code>); each non-empty entry is shown under that choice.</td></tr>' +
+      '<tr><td><code>explanations</code></td><td>optional</td><td>One entry per authored ' +
+        'choice (string or <code>null</code>); each non-empty entry is shown under that ' +
+        'choice.</td></tr>' +
       '</tbody></table>' +
       '<p class="small muted">A broken unit file is skipped and reported in the banner with ' +
       'its folder and file name; the rest of the set still loads. Duplicate or missing set ' +
@@ -1826,7 +1830,7 @@
     if (key.length === 1 && key >= 'A' && key <= 'Z') index = key.charCodeAt(0) - 65;
     var number = '123456789'.indexOf(key);
     if (number >= 0) index = number;
-    if (index >= 0 && index < session.questions[session.index].choices.length) {
+    if (index >= 0 && index < C.choicesFor(session.questions[session.index]).length) {
       event.preventDefault();
       selectChoice(index);
     }
