@@ -9,7 +9,8 @@ API so a session survives a browser-data wipe or a machine change:
     GET  /api/progress   stored JSON state, or 204 when none exists
     POST /api/progress   validate and atomically write a progress state
 
-Python standard library only. Run ``./qt`` or ``python3 serve.py``.
+Python standard library only. Run ``./qt`` or ``python3 serve.py``. The server
+stops itself after five minutes without requests (``--idle-timeout`` changes it).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -33,6 +35,7 @@ APP_PATH = "/app/"
 MAX_BODY = 2 * 1024 * 1024
 STATE_APP = "question-trainer"
 STATE_VERSION = 1
+IDLE_TIMEOUT = 300.0
 
 
 def is_progress_state(payload: object) -> bool:
@@ -43,6 +46,13 @@ def is_progress_state(payload: object) -> bool:
         and type(payload.get("v")) is int
         and payload.get("v") == STATE_VERSION
     )
+
+
+class TrainerServer(ThreadingHTTPServer):
+    """Threaded server that records when it last answered a request."""
+
+    daemon_threads = True
+    last_activity: float = 0.0
 
 
 class TrainerHandler(SimpleHTTPRequestHandler):
@@ -59,6 +69,7 @@ class TrainerHandler(SimpleHTTPRequestHandler):
     # uncacheable so a reload always sees the current data and progress. The
     # marker header lets a second launch recognise an instance of its own.
     def end_headers(self) -> None:
+        self.server.last_activity = time.monotonic()
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Question-Trainer", "1")
@@ -214,6 +225,13 @@ def parse_args() -> argparse.Namespace:
         help="progress state path (default progress/progress.json, relative to the repo)",
     )
     parser.add_argument("--no-open", action="store_true", help="do not open a browser")
+    parser.add_argument(
+        "--idle-timeout",
+        type=float,
+        default=IDLE_TIMEOUT,
+        metavar="SECONDS",
+        help="stop after this long without requests (default 300, 0 disables)",
+    )
     return parser.parse_args()
 
 
@@ -249,6 +267,17 @@ def reopen_running(args: argparse.Namespace, progress_path: Path) -> int:
     return 0
 
 
+def watch_idle(server: TrainerServer, timeout: float) -> None:
+    """Stop the server once it has answered no request for ``timeout`` seconds."""
+    interval = max(0.05, min(1.0, timeout / 4.0))
+    while True:
+        time.sleep(interval)
+        if time.monotonic() - server.last_activity >= timeout:
+            print(f"\nNo requests for {timeout:g}s; stopping.", flush=True)
+            server.shutdown()
+            return
+
+
 def main() -> int:
     args = parse_args()
     progress_path = Path(args.progress).expanduser()
@@ -257,13 +286,13 @@ def main() -> int:
     TrainerHandler.progress_path = progress_path
 
     try:
-        server = ThreadingHTTPServer((args.host, args.port), TrainerHandler)
+        server = TrainerServer((args.host, args.port), TrainerHandler)
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             return reopen_running(args, progress_path)
         raise
 
-    server.daemon_threads = True
+    server.last_activity = time.monotonic()
     host, port = server.server_address[:2]
     url = f"http://{host}:{port}{APP_PATH}"
     print(f"Question Trainer: {url}", flush=True)
@@ -271,6 +300,14 @@ def main() -> int:
 
     if not args.no_open:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    if args.idle_timeout > 0:
+        threading.Thread(
+            target=watch_idle,
+            args=(server, args.idle_timeout),
+            name="idle-watchdog",
+            daemon=True,
+        ).start()
 
     try:
         server.serve_forever()

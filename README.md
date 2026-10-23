@@ -31,6 +31,10 @@ so it survives a browser-data wipe and a server restart.
 `progress/progress.json`. `--host` defaults to `127.0.0.1` and `--port` to
 `8765`. `python3 serve.py` accepts the same flags.
 
+The server exits by itself after five minutes without requests; only incoming
+requests reset that clock, so an idle browser tab does not keep it alive.
+`--idle-timeout SECONDS` changes the limit (`0` keeps it running until Ctrl-C).
+
 Running `./qt` again while the server is up starts nothing new: it prints the
 running URL, opens that tab unless `--no-open` is given, and exits. It only does
 this for a server it recognises as Question Trainer; if the port belongs to
