@@ -31,6 +31,11 @@ so it survives a browser-data wipe and a server restart.
 `progress/progress.json`. `--host` defaults to `127.0.0.1` and `--port` to
 `8765`. `python3 serve.py` accepts the same flags.
 
+Running `./qt` again while the server is up starts nothing new: it prints the
+running URL, opens that tab unless `--no-open` is given, and exits. It only does
+this for a server it recognises as Question Trainer; if the port belongs to
+another program, it says so and exits non-zero.
+
 The page still works from a plain static server (for example
 `python3 -m http.server 8765` with `http://127.0.0.1:8765/app/`) or when opened
 from disk where the browser allows it. In that mode the progress API is not

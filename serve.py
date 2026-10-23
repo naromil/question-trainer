@@ -15,17 +15,21 @@ Python standard library only. Run ``./qt`` or ``python3 serve.py``.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
+import sys
 import tempfile
 import threading
 import urllib.parse
+import urllib.request
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 API_PATH = "/api/progress"
+APP_PATH = "/app/"
 MAX_BODY = 2 * 1024 * 1024
 STATE_APP = "question-trainer"
 STATE_VERSION = 1
@@ -52,10 +56,12 @@ class TrainerHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
 
     # Every response, including errors and generated directory listings, is
-    # uncacheable so a reload always sees the current data and progress.
+    # uncacheable so a reload always sees the current data and progress. The
+    # marker header lets a second launch recognise an instance of its own.
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Question-Trainer", "1")
         super().end_headers()
 
     def _route(self) -> str:
@@ -211,6 +217,38 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def probe_running(host: str, port: int) -> tuple[str, str | None] | None:
+    """Return (app URL, progress path) when Question Trainer already serves the port."""
+    connect = "127.0.0.1" if host in ("", "0.0.0.0") else host
+    base = f"http://{connect}:{port}"
+    request = urllib.request.Request(base + API_PATH, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            if response.headers.get("X-Question-Trainer") != "1":
+                return None
+            return base + APP_PATH, response.headers.get("X-Progress-Path")
+    except OSError:
+        return None
+
+
+def reopen_running(args: argparse.Namespace, progress_path: Path) -> int:
+    """The port is taken: if our own server holds it, open that one instead."""
+    running = probe_running(args.host, args.port)
+    if running is None:
+        print(
+            f"Port {args.host}:{args.port} is already in use by another program.",
+            file=sys.stderr,
+        )
+        return 1
+    url, served_progress = running
+    print(f"Question Trainer is already running: {url}", flush=True)
+    if served_progress and Path(served_progress).resolve() != progress_path:
+        print(f"Note: it keeps progress in {served_progress}.", flush=True)
+    if not args.no_open:
+        webbrowser.open(url)
+    return 0
+
+
 def main() -> int:
     args = parse_args()
     progress_path = Path(args.progress).expanduser()
@@ -218,10 +256,16 @@ def main() -> int:
         progress_path = (ROOT / progress_path).resolve()
     TrainerHandler.progress_path = progress_path
 
-    server = ThreadingHTTPServer((args.host, args.port), TrainerHandler)
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), TrainerHandler)
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            return reopen_running(args, progress_path)
+        raise
+
     server.daemon_threads = True
     host, port = server.server_address[:2]
-    url = f"http://{host}:{port}/app/"
+    url = f"http://{host}:{port}{APP_PATH}"
     print(f"Question Trainer: {url}", flush=True)
     print(f"Progress file: {progress_path}", flush=True)
 
