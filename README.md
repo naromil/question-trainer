@@ -81,7 +81,9 @@ Each listed file holds one set, either as a flat object or inside a
 `{ "sets": [...] }` wrapper. A set has `id`, `title`, optional `description`, and a
 non-empty `questions` array; each question has `id`, `question`, two or more
 `choices`, and `answer` as the **0-based index** of the correct choice.
-`passage`, `explanation` and per-choice `explanations` are optional.
+`passage`, `image` (with optional `imageAlt` and `imageCaption`), `explanation`
+and per-choice `explanations` are optional. Bare image paths are resolved
+against `questions/`, so the files can live in `questions/images/`.
 
 Ids are stable keys: progress is stored by set id plus question id, so renaming an
 id starts that item over. A broken file is reported in the banner with its file

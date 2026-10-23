@@ -21,6 +21,9 @@ function question(overrides) {
   return Object.assign({
     id: 'q1',
     passage: '',
+    image: '',
+    imageAlt: '',
+    imageCaption: '',
     question: 'Question?',
     choices: ['Alpha', 'Bravo', 'Charlie', 'Delta'],
     answer: 1,
@@ -138,6 +141,53 @@ test('normalizeBank: accepts the fixed format and applies defaults', () => {
   assert.equal(set.questions[1].explanation, 'Because.');
   assert.deepEqual(set.questions[1].explanations, ['A why', '', '', '']);
   assert.equal(set.questions[0].explanations, null);
+  assert.equal(set.questions[0].image, '');
+  assert.equal(set.questions[0].imageAlt, '');
+  assert.equal(set.questions[0].imageCaption, '');
+});
+
+test('normalizeBank: trims and keeps the question image fields', () => {
+  const sets = load(rawSet({
+    questions: [question({
+      image: '  images/australia-map.png  ',
+      imageAlt: '  Map of Australia with Canberra marked.  ',
+      imageCaption: '  Canberra is in the ACT.  '
+    })]
+  }));
+  const q = sets[0].questions[0];
+  assert.equal(q.image, 'images/australia-map.png');
+  assert.equal(q.imageAlt, 'Map of Australia with Canberra marked.');
+  assert.equal(q.imageCaption, 'Canberra is in the ACT.');
+});
+
+test('cloneSet: keeps the question image fields', () => {
+  const set = load(rawSet({
+    questions: [question({
+      image: 'images/australia-map.png',
+      imageAlt: 'Map of Australia.',
+      imageCaption: 'Canberra is marked.'
+    })]
+  }))[0];
+  const copy = C.cloneSet(set);
+  assert.equal(copy.questions[0].image, 'images/australia-map.png');
+  assert.equal(copy.questions[0].imageAlt, 'Map of Australia.');
+  assert.equal(copy.questions[0].imageCaption, 'Canberra is marked.');
+});
+
+test('resolveImage: resolves bare paths and rejects script schemes', () => {
+  const base = 'http://127.0.0.1:8765/questions/';
+  assert.equal(C.resolveImage('images/a.png', base),
+    'http://127.0.0.1:8765/questions/images/a.png');
+  assert.equal(C.resolveImage(' /images/a.png ', base),
+    'http://127.0.0.1:8765/images/a.png');
+  assert.equal(C.resolveImage('../assets/a.png', base),
+    'http://127.0.0.1:8765/assets/a.png');
+  assert.equal(C.resolveImage('https://cdn.example/a.png', base),
+    'https://cdn.example/a.png');
+  assert.equal(C.resolveImage('data:image/svg+xml,<svg></svg>', base),
+    'data:image/svg+xml,<svg></svg>');
+  assert.equal(C.resolveImage('javascript:alert(1)', base), '');
+  assert.equal(C.resolveImage('', base), '');
 });
 
 test('normalizeBank: reports one bad set and keeps the rest', () => {
@@ -205,6 +255,10 @@ test('questions/index.json and its set files are valid fixed-format data', () =>
     set.questions.forEach((item) => {
       assert.ok(item.choices.length >= 2);
       assert.ok(item.answer >= 0 && item.answer < item.choices.length);
+      if (item.image && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(item.image)) {
+        assert.ok(fs.existsSync(path.join(root, item.image)),
+          `${set.id}/${item.id}: image ${item.image} is missing`);
+      }
     });
   });
 });

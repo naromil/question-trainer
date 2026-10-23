@@ -37,6 +37,9 @@ Each listed file holds one set. The shipped files use the flat form:
     {
       "id": "q1",
       "passage": "Optional context shown above the question.",
+      "image": "images/australia-map.png",
+      "imageAlt": "Map of Australia with Canberra marked.",
+      "imageCaption": "Optional caption under the image.",
       "question": "What is the capital of Australia?",
       "choices": ["Sydney", "Canberra", "Melbourne", "Perth"],
       "answer": 1,
@@ -74,11 +77,33 @@ set id easy to match.
 | `choices` | array of strings | yes | At least two non-empty choices. Labels A, B, C … are generated from the order. |
 | `answer` | integer | yes | **0-based** index of the correct choice. `0` is the first choice, `1` the second, and so on. |
 | `passage` | string | no | Context shown above the stem. Blank lines separate paragraphs; lines starting with a bullet become list items. |
+| `image` | string | no | Image shown between the passage and the stem. A bare path is relative to the `questions/` directory; an absolute URL or a `data:` URI also works. |
+| `imageAlt` | string | no | Text alternative for the image. Recommended whenever `image` is set; without it the image has no accessible name. |
+| `imageCaption` | string | no | Visible caption shown under the image. |
 | `explanation` | string | no | Overall explanation shown after the answer is checked. |
 | `explanations` | array | no | One entry per choice, in the same order as `choices`. Each entry is a string or `null`; `null` and empty strings render nothing under that choice. |
 
 All strings are trimmed when the file is loaded. Empty optional strings are
 treated as absent.
+
+## Images
+
+Keep image files under `questions/` (for example `questions/images/`) and
+reference them with a path relative to that directory:
+
+```json
+"image": "images/australia-map.png",
+"imageAlt": "Map of Australia with Canberra marked.",
+"imageCaption": "Canberra is the capital, in the Australian Capital Territory."
+```
+
+The path is resolved against `questions/`, **not** against the set file, so the
+same string works for every set and for archived copies restored later. An
+absolute `https://` URL, a `data:` URI or a root-relative `/path` also works.
+The image is not fetched or checked while loading the JSON: a missing file
+renders an “Image could not be loaded.” line inside that one question, and the
+rest of the set still works. `imageAlt` is the text alternative for screen
+readers; `imageCaption` is visible to everyone.
 
 ## ID stability
 

@@ -24,6 +24,9 @@
 
   var STATE_KEY = 'questiontrainer.state.v1';
   var BANK_URL = '../questions/index.json';
+  /* Bare image paths are relative to the questions/ directory, not to the
+   * page or to the set file, so an archived copy resolves the same way. */
+  var IMAGE_BASE = new URL('.', new URL(BANK_URL, location.href)).href;
   var SOURCE_SETS = [];
   var LOAD_ERRORS = [];
   var LOCAL_STATE_PRESENT = false;
@@ -46,6 +49,16 @@
   function $$(selector, root) {
     return Array.prototype.slice.call((root || document).querySelectorAll(selector));
   }
+
+  /* Image error events do not bubble, but they can be captured at the
+   * document. A failed question image gets a readable line instead of only
+   * the browser's broken-image icon. */
+  document.addEventListener('error', function (event) {
+    var img = event.target;
+    if (!img || img.tagName !== 'IMG' || !img.classList ||
+        !img.classList.contains('q-figure-img')) return;
+    if (img.parentNode && img.parentNode.classList) img.parentNode.classList.add('is-broken');
+  }, true);
   function fmtTime(ms) {
     var total = Math.max(0, Math.floor(ms / 1000));
     return Math.floor(total / 60) + ':' + ('0' + (total % 60)).slice(-2);
@@ -746,6 +759,7 @@
         '<span class="tag">' + (index + 1) + ' of ' + session.questions.length + '</span>' +
       '</div>' +
       passageHTML(question.passage) +
+      figureHTML(question) +
       '<div class="stem">' + esc(question.question) + '</div>' +
       '<ul class="choices" id="choices">' + choices + '</ul>' +
       '<div class="actions">' +
@@ -846,6 +860,7 @@
         whyBlockHTML(question, i) + '</li>';
     }).join('');
     return passageHTML(question.passage) +
+      figureHTML(question) +
       '<div class="stem">' + esc(question.question) + '</div>' +
       '<ul class="choices">' + choices + '</ul>' +
       explanationHTML(question);
@@ -856,6 +871,21 @@
   function passageHTML(text) {
     if (!text) return '';
     return '<div class="stimulus">' + richTextHTML(text) + '</div>';
+  }
+
+  /* Optional question figure, placed between the passage and the stem. The
+   * error text is revealed only if the browser fails to load the image. */
+  function figureHTML(question) {
+    if (!question.image) return '';
+    var src = C.resolveImage(question.image, IMAGE_BASE);
+    if (!src) return '';
+    return '<figure class="q-figure">' +
+      '<img class="q-figure-img" src="' + esc(src) + '" alt="' +
+        esc(question.imageAlt || '') + '" loading="lazy" decoding="async">' +
+      '<div class="figure-error">Image could not be loaded.</div>' +
+      (question.imageCaption
+        ? '<figcaption>' + esc(question.imageCaption) + '</figcaption>' : '') +
+    '</figure>';
   }
 
   function richTextHTML(value) {
@@ -1226,6 +1256,9 @@
         {
           id: 'q1',
           passage: 'Optional context or passage.',
+          image: 'images/australia-map.png',
+          imageAlt: 'Map of Australia with Canberra marked.',
+          imageCaption: 'Optional caption under the image.',
           question: 'What is the capital of Australia?',
           choices: ['Sydney', 'Canberra', 'Melbourne', 'Perth'],
           answer: 1,
@@ -1267,6 +1300,13 @@
         'choice. The example answer <code>1</code> means the second choice.</td></tr>' +
       '<tr><td><code>passage</code></td><td>optional</td><td>Context shown above the question. ' +
         'Blank lines separate paragraphs; lines starting with • become a list.</td></tr>' +
+      '<tr><td><code>image</code></td><td>optional</td><td>Image shown between the passage ' +
+        'and the stem. Bare paths resolve against <code>questions/</code>; absolute URLs ' +
+        'and <code>data:</code> URIs also work.</td></tr>' +
+      '<tr><td><code>imageAlt</code></td><td>optional</td><td>Alt text for the image; without ' +
+        'it the image has no text alternative for screen readers.</td></tr>' +
+      '<tr><td><code>imageCaption</code></td><td>optional</td><td>Caption shown under the ' +
+        'image.</td></tr>' +
       '<tr><td><code>explanation</code></td><td>optional</td><td>Overall explanation shown ' +
         'after answering.</td></tr>' +
       '<tr><td><code>explanations</code></td><td>optional</td><td>One entry per choice ' +

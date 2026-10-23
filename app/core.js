@@ -114,7 +114,8 @@
    * flat set object or a { "sets": [...] } wrapper:
    *   { "id", "title", "description"?, "questions": [
    *       { "id", "question", "choices": ["..."], "answer": <0-based index>,
-   *         "passage"?, "explanation"?, "explanations"?: ["..." | null] }
+   *         "passage"?, "image"?, "imageAlt"?, "imageCaption"?,
+   *         "explanation"?, "explanations"?: ["..." | null] }
    *   ] }
    *
    * One bad set is reported and skipped; the rest of the file still loads.
@@ -122,6 +123,21 @@
    * ------------------------------------------------------------------ */
   function text(value) {
     return typeof value === 'string' ? value.trim() : '';
+  }
+
+  /* Question images are stored as written. Bare paths are resolved against
+   * the questions/ directory by the app; absolute URLs and data: URIs pass
+   * through. Script schemes are dropped rather than copied into an <img src>. */
+  function resolveImage(value, base) {
+    var src = text(value);
+    if (!src) return '';
+    if (/^(?:javascript|vbscript):/i.test(src)) return '';
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) return src;
+    try {
+      return new URL(src, base).href;
+    } catch (err) {
+      return '';
+    }
   }
 
   function normalizeQuestion(raw, index) {
@@ -169,6 +185,9 @@
     return {
       id: id,
       passage: text(raw.passage),
+      image: text(raw.image),
+      imageAlt: text(raw.imageAlt),
+      imageCaption: text(raw.imageCaption),
       question: prompt,
       choices: choices,
       answer: answer,
@@ -236,6 +255,9 @@
         return {
           id: question.id,
           passage: question.passage,
+          image: question.image,
+          imageAlt: question.imageAlt,
+          imageCaption: question.imageCaption,
           question: question.question,
           choices: question.choices.slice(),
           answer: question.answer,
@@ -728,6 +750,7 @@
     dayKey: dayKey,
     letterFor: letterFor,
     questionKey: questionKey,
+    resolveImage: resolveImage,
     normalizeBank: normalizeBank,
     normalizeSet: normalizeSet,
     cloneSet: cloneSet,
