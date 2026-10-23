@@ -530,7 +530,11 @@
     if (!window.confirm('Archive "' + set.title + '"? You can restore it from the Archive page.')) {
       return;
     }
-    C.archiveSet(state, set, Date.now());
+    /* activeSets() hides archived units, but the snapshot should keep the set's
+     * original unit order, so hand archiveSet the unfiltered copy when one is
+     * available. A local copy wins over the source, matching activeSets(). */
+    var full = state.local[setId] || sourceSet(setId) || set;
+    C.archiveSet(state, full, Date.now());
     if (!saveState()) {
       window.alert('The archive could not be saved because browser storage is full.');
     }
