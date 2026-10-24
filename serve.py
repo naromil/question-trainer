@@ -115,15 +115,27 @@ class TrainerHandler(SimpleHTTPRequestHandler):
         return self.progress_path.with_name(self.progress_path.name + ".bak")
 
     def _serves_progress_file(self) -> bool:
-        """True when the request resolves to the progress file or its backup."""
-        candidate = self.translate_path(self.path)
+        """True when the request resolves to progress data.
+
+        Everything under the repository's ``progress`` directory is private,
+        even when ``--progress`` points elsewhere. The configured progress file
+        and its backup are private too, wherever they live.
+        """
+        candidate = os.path.realpath(self.translate_path(self.path))
+        private_directory = os.path.realpath(ROOT / "progress")
+        try:
+            if os.path.commonpath((candidate, private_directory)) == private_directory:
+                return True
+        except ValueError:
+            pass
         for private in (self.progress_path, self._backup_path()):
+            if candidate == os.path.realpath(private):
+                return True
             try:
                 if os.path.samefile(candidate, private):
                     return True
             except OSError:
-                if os.path.realpath(candidate) == os.path.realpath(private):
-                    return True
+                pass
         return False
 
     def _redirect_to_app(self) -> bool:
@@ -278,6 +290,24 @@ class TrainerHandler(SimpleHTTPRequestHandler):
             except FileNotFoundError:
                 pass
 
+    def _stored_state(self) -> tuple[int | None, dict | None]:
+        """The primary state's parsed object and integer ``updated`` stamp.
+
+        Returns ``(None, None)`` when the file is missing, unreadable, or not a
+        valid progress state: such a file is a repair candidate and never
+        blocks an incoming write.
+        """
+        try:
+            body = self.progress_path.read_bytes()
+        except OSError:
+            return None, None
+        if not is_progress_bytes(body):
+            return None, None
+        payload = json.loads(body.decode("utf-8"))
+        assert isinstance(payload, dict)
+        updated = payload.get("updated")
+        return (updated if type(updated) is int else None), payload
+
     def _post_progress(self) -> None:
         body = self._read_body()
         if body is None:
@@ -293,13 +323,38 @@ class TrainerHandler(SimpleHTTPRequestHandler):
             })
             return
         assert isinstance(payload, dict)
+        conflict: dict[str, object] | None = None
         try:
             with self.progress_lock:
-                self._write_progress(payload)
+                current_updated, current_payload = self._stored_state()
+                incoming_updated = payload.get("updated")
+                if type(incoming_updated) is not int:
+                    incoming_updated = None
+                if (
+                    current_updated is not None
+                    and incoming_updated is not None
+                    and incoming_updated <= current_updated
+                ):
+                    # An identical state is a redundant no-op; anything else at
+                    # or below the stored stamp would roll newer progress back.
+                    identical = (
+                        incoming_updated == current_updated
+                        and payload == current_payload
+                    )
+                    if not identical:
+                        conflict = {
+                            "error": "progress state is not newer than the stored state",
+                            "current": current_updated,
+                        }
+                else:
+                    self._write_progress(payload)
         except OSError as exc:
             self._send_json(500, {"error": f"could not write progress: {exc}"})
             return
-        self._send_bytes(204, b"", "application/json; charset=utf-8")
+        if conflict is not None:
+            self._send_json(409, conflict)
+        else:
+            self._send_bytes(204, b"", "application/json; charset=utf-8")
 
     def _reject_static_path(self) -> bool:
         """Answer unsafe, hidden, and private paths before static serving."""

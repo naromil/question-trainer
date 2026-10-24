@@ -648,6 +648,142 @@
     return state;
   }
 
+  /* Stamp a state after a local change. The clock alone is not enough for
+   * conflict detection: two writes in the same millisecond, or a clock that
+   * stepped backwards, must still produce a strictly increasing stamp. */
+  function stampState(state, now) {
+    now = typeof now === 'number' && isFinite(now) ? now : Date.now();
+    var value = Math.max(now, (Number(state.updated) || 0) + 1);
+    state.updated = value;
+    return value;
+  }
+
+  /* The union keys of two plain objects, preserving first-seen order. */
+  function unionKeys(first, second) {
+    var seen = {};
+    var keys = [];
+    [first, second].forEach(function (map) {
+      if (!map || typeof map !== 'object') return;
+      Object.keys(map).forEach(function (key) {
+        if (seen[key]) return;
+        seen[key] = true;
+        keys.push(key);
+      });
+    });
+    return keys;
+  }
+
+  function counterOf(record, field) {
+    return record && typeof record === 'object' ? Math.max(0, record[field] | 0) : 0;
+  }
+
+  function lastOf(record) {
+    return record && typeof record === 'object' &&
+      typeof record.last === 'number' && isFinite(record.last) ? record.last : -Infinity;
+  }
+
+  function mergeRecord(server, local) {
+    if (!server || typeof server !== 'object') return local;
+    if (!local || typeof local !== 'object') return server;
+    var serverLast = lastOf(server);
+    var localLast = lastOf(local);
+    if (localLast > serverLast) return local;
+    if (serverLast > localLast) return server;
+    return counterOf(local, 'a') > counterOf(server, 'a') ? local : server;
+  }
+
+  /* Reconcile a browser state (local, just changed) with the newer disk copy
+   * (server). The merge is additive and deliberate:
+   *   - question records are keyed unions; the newer `last` wins, then the
+   *     larger attempt count, then the server record. Two tabs answering the
+   *     same question concurrently therefore collapse to one record instead of
+   *     double-counting the answer;
+   *   - per-set, per-day and all-time counters take each field's maximum, so
+   *     the result never exceeds the high-water mark of either side;
+   *   - settings, local sets and archives keep the local values, because the
+   *     action that triggered the merge happened in this browser;
+   *   - creation time is the earlier of the two and the schema comes from the
+   *     server;
+   *   - the result is sanitized so the archive invariants (an archived set is
+   *     not also active, a unit of an archived set is not separately archived)
+   *     hold even if the union produced contradictions.
+   * Neither input is mutated. */
+  function mergeStates(server, local, now) {
+    server = server && typeof server === 'object' ? server : {};
+    local = local && typeof local === 'object' ? local : {};
+    now = typeof now === 'number' && isFinite(now) ? now : Date.now();
+
+    var created;
+    if (typeof server.created === 'number' && typeof local.created === 'number') {
+      created = Math.min(server.created, local.created);
+    } else {
+      created = typeof local.created === 'number' ? local.created : server.created;
+    }
+
+    var raw = {
+      app: server.app,
+      v: server.v,
+      created: created,
+      updated: Math.max(
+        typeof server.updated === 'number' && isFinite(server.updated) ? server.updated : 0,
+        typeof local.updated === 'number' && isFinite(local.updated) ? local.updated : 0),
+      q: {},
+      sets: {},
+      local: {},
+      archived: {},
+      archivedUnits: {},
+      days: {},
+      settings: local.settings,
+      totals: {
+        a: Math.max(counterOf(server.totals, 'a'), counterOf(local.totals, 'a')),
+        c: Math.max(counterOf(server.totals, 'c'), counterOf(local.totals, 'c')),
+        sessions: Math.max(counterOf(server.totals, 'sessions'),
+          counterOf(local.totals, 'sessions'))
+      }
+    };
+
+    unionKeys(server.q, local.q).forEach(function (key) {
+      raw.q[key] = mergeRecord(server.q && server.q[key], local.q && local.q[key]);
+    });
+
+    unionKeys(server.sets, local.sets).forEach(function (setId) {
+      var s = server.sets && server.sets[setId];
+      var l = local.sets && local.sets[setId];
+      raw.sets[setId] = {
+        a: Math.max(counterOf(s, 'a'), counterOf(l, 'a')),
+        c: Math.max(counterOf(s, 'c'), counterOf(l, 'c')),
+        streak: Math.max(counterOf(s, 'streak'), counterOf(l, 'streak'))
+      };
+    });
+
+    unionKeys(server.days, local.days).forEach(function (key) {
+      var s = server.days && server.days[key];
+      var l = local.days && local.days[key];
+      raw.days[key] = {
+        a: Math.max(counterOf(s, 'a'), counterOf(l, 'a')),
+        c: Math.max(counterOf(s, 'c'), counterOf(l, 'c'))
+      };
+    });
+
+    unionKeys(server.local, local.local).forEach(function (id) {
+      raw.local[id] = local.local && local.local[id] != null
+        ? local.local[id]
+        : server.local[id];
+    });
+    unionKeys(server.archived, local.archived).forEach(function (id) {
+      raw.archived[id] = local.archived && local.archived[id] != null
+        ? local.archived[id]
+        : server.archived[id];
+    });
+    unionKeys(server.archivedUnits, local.archivedUnits).forEach(function (key) {
+      raw.archivedUnits[key] = local.archivedUnits && local.archivedUnits[key] != null
+        ? local.archivedUnits[key]
+        : server.archivedUnits[key];
+    });
+
+    return sanitizeState(raw, now);
+  }
+
   function recordFor(state, setId, questionId) {
     return state.q[questionKey(setId, questionId)] || null;
   }
@@ -704,8 +840,7 @@
       chosen: chosen,
       coin: correct ? (hadCorrectBefore ? 'repeat' : 'new') : 'miss',
       boxBefore: boxBefore,
-      boxAfter: boxAfter,
-      firstCorrect: correct && !hadCorrectBefore
+      boxAfter: boxAfter
     };
   }
 
@@ -781,19 +916,25 @@
   }
 
   /* Decorate with a random tiebreak so equal-priority questions come in a
-   * different order each session (deterministic when `rng` is provided). */
+   * different order each session (deterministic when `rng` is provided).
+   * Practice goes weakest first, ordered by mastery share, then box, then
+   * least-recently-answered, then fewest attempts, then rng. The mastery
+   * share is the primary key, so an unseen question (share 0) is served
+   * before a known one, even when the known one sits in an earlier box. */
   function decorate(list, state, setId, rng) {
     return list.map(function (question) {
       return { q: question, r: rng() };
     }).sort(function (x, y) {
       var rx = recordFor(state, setId, x.q.id);
       var ry = recordFor(state, setId, y.q.id);
+      var sx = questionShare(rx) - questionShare(ry);
+      if (sx) return sx;
       var bx = (rx ? rx.box : 0) - (ry ? ry.box : 0);
       if (bx) return bx;
-      var ax = (rx ? rx.a : 0) - (ry ? ry.a : 0);
-      if (ax) return ax;
       var lx = (rx ? rx.last : 0) - (ry ? ry.last : 0);
       if (lx) return lx;
+      var ax = (rx ? rx.a : 0) - (ry ? ry.a : 0);
+      if (ax) return ax;
       return x.r - y.r;
     }).map(function (entry) { return entry.q; });
   }
@@ -833,6 +974,163 @@
     return decorate(pool, state, setId, rng).slice(0, limit);
   }
 
+  /* The disposable sessionStorage payload for a running session. Results carry
+   * the reward as it was at answer time, because mastery may have moved on
+   * since then. `elapsed` is passed in so the caller keeps owning the clock. */
+  function makeSessionSnapshot(session, elapsed) {
+    var excluded = [];
+    Object.keys(session.excluded || {}).forEach(function (key) {
+      var index = parseInt(key, 10);
+      if (index >= 0 && session.excluded[key]) excluded.push(index);
+    });
+    excluded.sort(function (a, b) { return a - b; });
+    return {
+      v: 1,
+      cfg: {
+        setId: session.cfg.setId,
+        unitId: session.cfg.unitId || '',
+        mode: session.cfg.mode,
+        length: session.cfg.length
+      },
+      ids: session.questions.map(function (question) { return question.id; }),
+      index: session.index,
+      results: session.results.map(function (record) {
+        return {
+          index: record.index,
+          questionId: record.question.id,
+          chosen: record.chosen,
+          expected: record.expected,
+          correct: record.correct,
+          coin: record.coin,
+          pointsBefore: record.pointsBefore,
+          pointsAfter: record.pointsAfter,
+          pointsDelta: record.pointsDelta,
+          boxBefore: record.boxBefore,
+          boxAfter: record.boxAfter,
+          streak: record.streak
+        };
+      }),
+      selected: session.selected,
+      excluded: excluded,
+      checked: !!session.checked,
+      elapsed: elapsed
+    };
+  }
+
+  function finiteNumber(value) {
+    return typeof value === 'number' && isFinite(value);
+  }
+
+  /* Rebuild a session from a makeSessionSnapshot() payload against the set it
+   * claims to belong to. Every id is checked against the current bank, so a
+   * session whose ids no longer resolve is dropped rather than half-restored.
+   * Returns a session object ready to resume, or null when anything is off. */
+  function restoreSessionSnapshot(raw, set) {
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+
+    var cfg = raw.cfg;
+    var mode = cfg && cfg.mode;
+    var valid = !!cfg && typeof cfg.setId === 'string' && !!cfg.setId &&
+      (mode === 'practice' || mode === 'review' || mode === 'retry') &&
+      finiteNumber(cfg.length) && Math.floor(cfg.length) === cfg.length &&
+      cfg.length >= 1 && cfg.length <= 50 &&
+      (cfg.unitId == null || typeof cfg.unitId === 'string') &&
+      Array.isArray(raw.ids) && finiteNumber(raw.index) &&
+      Math.floor(raw.index) === raw.index && raw.index >= 0 &&
+      raw.index <= raw.ids.length &&
+      Array.isArray(raw.results) && typeof raw.checked === 'boolean' &&
+      finiteNumber(raw.elapsed) && raw.elapsed >= 0 &&
+      (raw.selected == null || (finiteNumber(raw.selected) &&
+        Math.floor(raw.selected) === raw.selected && raw.selected >= 0)) &&
+      Array.isArray(raw.excluded);
+    if (!valid) return null;
+
+    var unitId = cfg.unitId || '';
+    if (!set) return null;
+    if (unitId && !unitOf(set, unitId)) return null;
+
+    var pool = questionsOf(set, unitId);
+    var byId = {};
+    pool.forEach(function (question) { byId[question.id] = question; });
+    var questions = [];
+    var seen = {};
+    for (var i = 0; i < raw.ids.length; i++) {
+      var id = raw.ids[i];
+      if (typeof id !== 'string' || !byId[id] || seen[id]) return null;
+      seen[id] = true;
+      questions.push(byId[id]);
+    }
+
+    var results = [];
+    var resultByIndex = {};
+    for (var j = 0; j < raw.results.length; j++) {
+      var rec = raw.results[j];
+      var pos = rec && rec.index;
+      if (!rec || typeof rec !== 'object' || !finiteNumber(pos) ||
+          Math.floor(pos) !== pos || pos < 0 || pos >= questions.length ||
+          questions[pos].id !== rec.questionId ||
+          typeof rec.chosen !== 'string' || typeof rec.expected !== 'string' ||
+          typeof rec.correct !== 'boolean' ||
+          (rec.coin !== 'new' && rec.coin !== 'repeat' && rec.coin !== 'miss') ||
+          !finiteNumber(rec.pointsBefore) || !finiteNumber(rec.pointsAfter) ||
+          !finiteNumber(rec.pointsDelta) || !finiteNumber(rec.boxBefore) ||
+          !finiteNumber(rec.boxAfter) || !finiteNumber(rec.streak) ||
+          resultByIndex[pos]) {
+        return null;
+      }
+      var record = {
+        index: pos,
+        questionId: rec.questionId,
+        question: questions[pos],
+        chosen: rec.chosen,
+        expected: rec.expected,
+        correct: rec.correct,
+        coin: rec.coin,
+        pointsBefore: rec.pointsBefore,
+        pointsAfter: rec.pointsAfter,
+        pointsDelta: rec.pointsDelta,
+        boxBefore: rec.boxBefore,
+        boxAfter: rec.boxAfter,
+        streak: rec.streak
+      };
+      results.push(record);
+      resultByIndex[pos] = record;
+    }
+    /* A checked cursor without its graded record could not paint feedback.
+     * At the results screen the cursor sits past the last question, so there
+     * is no record at its index. */
+    if (raw.checked && raw.index < questions.length && !resultByIndex[raw.index]) {
+      return null;
+    }
+
+    var excluded = {};
+    for (var k = 0; k < raw.excluded.length; k++) {
+      var crossed = raw.excluded[k];
+      if (!finiteNumber(crossed) || Math.floor(crossed) !== crossed || crossed < 0) {
+        return null;
+      }
+      excluded[crossed] = true;
+    }
+    var selected = raw.selected == null ? null : raw.selected;
+    if (selected != null && raw.index < questions.length &&
+        selected >= choicesFor(questions[raw.index]).length) {
+      return null;
+    }
+
+    return {
+      cfg: { setId: cfg.setId, unitId: unitId, mode: mode, length: cfg.length },
+      set: set,
+      questions: questions,
+      index: raw.index,
+      results: results,
+      selected: selected,
+      excluded: excluded,
+      checked: raw.checked,
+      elapsed: raw.elapsed,
+      runningSince: null
+    };
+  }
+
   /* Forget one set's question history and mastery. Daily activity and the
    * all-time totals are cross-set aggregates, so they keep their history; the
    * set's own rows and due count are recalculated from the empty records. */
@@ -865,7 +1163,6 @@
       unitRows: units.map(function (unit) { return unitStats(state, set, unit, now); }),
       total: 0,
       attempted: 0,
-      correct: 0,
       correctFirstTry: 0,
       due: 0,
       points: masteryOf(state, set.id, questionsOf(set)),
@@ -874,7 +1171,6 @@
     row.unitRows.forEach(function (unitRow) {
       row.total += unitRow.total;
       row.attempted += unitRow.attempted;
-      row.correct += unitRow.correct;
       row.correctFirstTry += unitRow.correctFirstTry;
       row.due += unitRow.due;
     });
@@ -900,7 +1196,6 @@
       setId: set.id,
       total: unit.questions.length,
       attempted: 0,
-      correct: 0,
       correctFirstTry: 0,
       due: 0,
       points: masteryOf(state, set.id, unit.questions)
@@ -909,16 +1204,13 @@
       var rec = recordFor(state, set.id, question.id);
       if (!rec || rec.a <= 0) return;
       row.attempted += 1;
-      row.correct += rec.c;
       row.correctFirstTry += rec.f;
       if (rec.due <= now) row.due += 1;
     });
     row.accuracy = row.attempted
       ? Math.round((row.correctFirstTry / row.attempted) * 100)
       : 0;
-    row.coverage = row.total ? Math.round((row.attempted / row.total) * 100) : 0;
     row.tier = tierOf(row.points, row.attempted);
-    row.unseen = row.total - row.attempted;
     return row;
   }
 
@@ -965,9 +1257,13 @@
     return keyed.map(function (entry) { return entry.row; });
   }
 
-  function overallStats(state, sets, now) {
+  /* Aggregate set rows into the global counters. The rows may come from
+   * allSetStats (active plus archived history), which is what overallStats
+   * does; keeping the aggregation separate lets a caller reuse it over a row
+   * list it already has. */
+  function statsFromRows(state, rows, now) {
     now = now || Date.now();
-    var rows = allSetStats(state, sets, now);
+    rows = rows || [];
     var attempted = 0;
     var firstTry = 0;
     rows.forEach(function (row) {
@@ -992,27 +1288,51 @@
     };
   }
 
+  function overallStats(state, sets, now) {
+    now = now || Date.now();
+    return statsFromRows(state, allSetStats(state, sets, now), now);
+  }
+
+  /* The last `days` local calendar dates, oldest first, ending with the local
+   * date containing `now`. Walking a local-noon cursor with setDate() keeps
+   * every entry on a distinct local day across DST: subtracting fixed DAY_MS
+   * steps would skip the spring-forward date and repeat the fall-back one. */
+  function recentDayKeys(now, days) {
+    now = typeof now === 'number' ? now : Date.now();
+    var count = Math.max(0, Math.floor(Number(days) || 0));
+    var cursor = new Date(now);
+    cursor.setHours(12, 0, 0, 0);
+    var keys = [];
+    for (var i = 0; i < count; i++) {
+      keys.push(dayKey(cursor.getTime()));
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return keys.reverse();
+  }
+
   function activity(state, days, now) {
     now = typeof now === 'number' ? now : Date.now();
-    var out = [];
-    for (var i = days - 1; i >= 0; i--) {
-      var key = dayKey(now - i * DAY_MS);
+    return recentDayKeys(now, days).map(function (key) {
       var rec = state.days[key] || { a: 0, c: 0 };
-      out.push({ date: key, a: rec.a, c: rec.c });
-    }
-    return out;
+      return { date: key, a: rec.a, c: rec.c };
+    });
   }
 
   /* Consecutive days with at least one answer, counting back from today. A
-   * day with no answers yet does not break the streak until it is over. */
+   * day with no answers yet does not break the streak until it is over, so an
+   * untouched today starts the walk at yesterday instead. */
   function streak(state, now) {
     now = typeof now === 'number' ? now : Date.now();
+    var cursor = new Date(now);
+    cursor.setHours(12, 0, 0, 0);
+    var today = state.days[dayKey(cursor.getTime())];
+    if (!(today && today.a > 0)) cursor.setDate(cursor.getDate() - 1);
     var count = 0;
-    var offset = state.days[dayKey(now)] && state.days[dayKey(now)].a > 0 ? 0 : 1;
-    for (var i = offset; i < 400; i++) {
-      var rec = state.days[dayKey(now - i * DAY_MS)];
+    for (var i = 0; i < 400; i++) {
+      var rec = state.days[dayKey(cursor.getTime())];
       if (rec && rec.a > 0) count++;
       else break;
+      cursor.setDate(cursor.getDate() - 1);
     }
     return count;
   }
@@ -1189,12 +1509,51 @@
   }
 
   /* Every set that still has history worth reporting: active sets plus archived
-   * sets. Archived units are part of their set's history and are not added
-   * separately, or their questions would be counted twice. */
+   * whole sets. Archived units are merged back into their parent set's unit
+   * list so stats keep counting their questions. activeSets still filters them
+   * out for practice and actionability; this view is for totals only. Rows are
+   * never mutated in place: a set that gains archived units is rebuilt with
+   * withUnits(), keeping the parent set id so progress keys still resolve. */
   function allSets(state, sourceSets) {
-    var out = activeSets(state, sourceSets);
+    var out = [];
     var seen = {};
-    out.forEach(function (set) { seen[set.id] = true; });
+    var archivedUnits = state.archivedUnits || {};
+
+    activeSets(state, sourceSets).forEach(function (set) {
+      var units = unitsOf(set);
+      var present = {};
+      units.forEach(function (unit) { present[unit.id] = true; });
+      var merged = units.slice();
+      Object.keys(archivedUnits).forEach(function (key) {
+        var unit = archivedUnits[key];
+        if (!unit || unit.setId !== set.id || present[unit.id]) return;
+        present[unit.id] = true;
+        merged.push(cloneUnit(unit));
+      });
+      seen[set.id] = true;
+      out.push(merged.length === units.length ? set : withUnits(set, merged));
+    });
+
+    /* A set whose every unit is archived no longer appears in activeSets, but
+     * its questions and records still belong to the stats. Synthesize it from
+     * the archive entries so the bank size does not shrink. */
+    Object.keys(archivedUnits).forEach(function (key) {
+      var unit = archivedUnits[key];
+      if (!unit || seen[unit.setId] || state.archived[unit.setId]) return;
+      var units = [];
+      Object.keys(archivedUnits).forEach(function (otherKey) {
+        var other = archivedUnits[otherKey];
+        if (!other || other.setId !== unit.setId) return;
+        units.push(cloneUnit(other));
+      });
+      seen[unit.setId] = true;
+      out.push(withUnits({
+        id: unit.setId,
+        title: unit.setTitle || unit.setId,
+        description: ''
+      }, units));
+    });
+
     archivedSets(state).forEach(function (set) {
       if (set.kind === 'unit' || seen[set.id]) return;
       seen[set.id] = true;
@@ -1236,6 +1595,7 @@
     DAY_MS: DAY_MS,
     DONT_KNOW_CHOICE: DONT_KNOW_CHOICE,
     dayKey: dayKey,
+    recentDayKeys: recentDayKeys,
     letterFor: letterFor,
     choicesFor: choicesFor,
     questionKey: questionKey,
@@ -1250,6 +1610,8 @@
     cloneUnit: cloneUnit,
     emptyState: emptyState,
     sanitizeState: sanitizeState,
+    stampState: stampState,
+    mergeStates: mergeStates,
     sessionLength: sessionLength,
     nextTheme: nextTheme,
     applyAnswer: applyAnswer,
@@ -1259,10 +1621,13 @@
     masteryOf: masteryOf,
     dueQuestions: dueQuestions,
     selectSession: selectSession,
+    makeSessionSnapshot: makeSessionSnapshot,
+    restoreSessionSnapshot: restoreSessionSnapshot,
     resetSetProgress: resetSetProgress,
     setStats: setStats,
     unitStats: unitStats,
     allSetStats: allSetStats,
+    statsFromRows: statsFromRows,
     overallStats: overallStats,
     activity: activity,
     streak: streak,

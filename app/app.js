@@ -42,12 +42,19 @@
    * own health; the notice and Settings read both. */
   var localWriteFailed = false;
   var diskPushFailed = false;
+  /* The server answered 500 for the progress file: the browser copy is still
+   * trustworthy, and the next save may replace the unreadable file. */
+  var diskUnreadable = false;
+  var pushRetryPending = false;
   var state = loadState();
   var session = null;
   var timer = null;
   /* Home list controls survive re-renders of the page but not a reload. */
   var homeQuery = '';
   var homeSort = 'index';
+  /* The trouble rows last painted on Progress; the per-set practice buttons
+   * reuse them instead of re-walking the bank. */
+  var lastTroubleRows = [];
   /* Which hash was on screen for the last full render; a route change moves
    * focus and the scroll position, an in-place re-render keeps both. */
   var lastRenderedHash = null;
@@ -89,6 +96,14 @@
   function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
   function clampInt(n, lo, hi) { return Math.min(hi, Math.max(lo, n | 0)); }
   function letterFor(index) { return C.letterFor(index); }
+  /* The line under a mastery bar. Never-attempted rows omit the first-try
+   * share: "0% first try" would read like a measured failure. */
+  function metaText(row) {
+    var text = row.points + '% mastery · ' +
+      row.attempted + '/' + row.total + ' answered';
+    if (row.attempted > 0) text += ' · ' + row.accuracy + '% first try';
+    return text;
+  }
 
   /* ------------------------------------------------------------ storage */
   function loadState() {
@@ -120,11 +135,12 @@
 
   /* Fire-and-forget disk mirror. Posts are serialised so a slow request cannot
    * let an older state overwrite a newer one; answers never wait for it. */
-  function pushProgress() {
+  function pushProgress(retry) {
     if (PERSISTENCE_MODE !== 'disk' || location.protocol === 'file:') return;
     if (pushBusy) { pushQueued = true; return; }
     pushBusy = true;
     var wasFailed = diskPushFailed;
+    var wasUnreadable = diskUnreadable;
     var body;
     try { body = JSON.stringify(state); } catch (err) {
       pushBusy = false;
@@ -140,26 +156,93 @@
     }).then(function (response) {
       var path = response.headers.get('X-Progress-Path');
       if (path) PROGRESS_PATH = path;
+      if (response.status === 409) {
+        /* The disk copy changed underneath this page. Merge it once, then
+         * re-post; a second rejection is reported instead of looping. */
+        if (retry) {
+          diskPushFailed = true;
+          return null;
+        }
+        return resolveProgressConflict();
+      }
       if (!response.ok) throw new Error('HTTP ' + response.status);
       diskPushFailed = false;
+      diskUnreadable = false;
     }).catch(function () {
       /* localStorage is still authoritative for this page. */
       diskPushFailed = true;
     }).then(function () {
       pushBusy = false;
-      if (wasFailed !== diskPushFailed) renderNotice();
-      if (pushQueued) { pushQueued = false; pushProgress(); }
+      if (wasFailed !== diskPushFailed || wasUnreadable !== diskUnreadable) renderNotice();
+      if (pushQueued) {
+        pushQueued = false;
+        var again = pushRetryPending;
+        pushRetryPending = false;
+        pushProgress(again);
+      }
+    });
+  }
+
+  /* Read the newer disk copy, fold this page's changes into it, and queue the
+   * single re-post. Only chrome is repainted: a full render here would steal
+   * focus from whatever the user is doing. */
+  function resolveProgressConflict() {
+    return fetch(progressUrl(), { cache: 'no-store' }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    }).then(function (raw) {
+      /* sanitizeState() is total: a malformed payload would become an empty
+       * state and could erase real progress. Treat it as a failed read. */
+      if (!raw || typeof raw !== 'object' || raw.app !== C.STATE_APP ||
+          raw.v !== C.STATE_VERSION) {
+        throw new Error('invalid progress state');
+      }
+      var serverState = C.sanitizeState(raw, Date.now());
+      state = C.mergeStates(serverState, state, Date.now());
+      C.stampState(state, Date.now());
+      writeLocal();
+      applyTheme();
+      renderPills();
+      renderNotice();
+      pushRetryPending = true;
+      pushQueued = true;
     });
   }
 
   /* Progress is saved in two places; either can fail on its own, so both
    * report through the notice while the page keeps working. */
   function saveState() {
+    /* Every local change needs a fresh stamp: a later boot lets the disk copy
+     * win ties, so a failed POST would otherwise lose settings/imports. */
+    C.stampState(state, Date.now());
     var saved = writeLocal();
     pushProgress();
     renderNotice();
     return saved;
   }
+
+  /* Another tab saved. Adopt its state only when it is newer, and never write
+   * back: a storage echo would otherwise ping-pong between tabs. */
+  window.addEventListener('storage', function (event) {
+    if (event.key !== STATE_KEY || !event.newValue) return;
+    var raw = null;
+    try {
+      raw = JSON.parse(event.newValue);
+    } catch (err) {
+      return;
+    }
+    /* sanitizeState() is total: anything that parses but is not a progress
+     * state would become an empty state stamped now, wiping this tab. */
+    if (!raw || typeof raw !== 'object' || raw.app !== C.STATE_APP ||
+        raw.v !== C.STATE_VERSION) return;
+    var incoming = C.sanitizeState(raw, Date.now());
+    if (!(incoming.updated > state.updated)) return;
+    state = incoming;
+    applyTheme();
+    renderNotice();
+    renderPills();
+    render();
+  });
 
   function clearStoredState() {
     try { localStorage.removeItem(STATE_KEY); } catch (err) { /* ignore */ }
@@ -176,51 +259,12 @@
 
   function persistSession() {
     if (!session) return;
-    var excluded = [];
-    Object.keys(session.excluded || {}).forEach(function (key) {
-      var index = parseInt(key, 10);
-      if (index >= 0) excluded.push(index);
-    });
-    var snapshot = {
-      v: 1,
-      cfg: {
-        setId: session.cfg.setId,
-        unitId: session.cfg.unitId || '',
-        mode: session.cfg.mode,
-        length: session.cfg.length
-      },
-      ids: session.questions.map(function (question) { return question.id; }),
-      index: session.index,
-      results: session.results.map(function (record) {
-        return {
-          index: record.index,
-          questionId: record.question.id,
-          chosen: record.chosen,
-          expected: record.expected,
-          correct: record.correct,
-          coin: record.coin,
-          pointsBefore: record.pointsBefore,
-          pointsAfter: record.pointsAfter,
-          pointsDelta: record.pointsDelta,
-          boxBefore: record.boxBefore,
-          boxAfter: record.boxAfter,
-          streak: record.streak
-        };
-      }),
-      selected: session.selected,
-      excluded: excluded,
-      checked: !!session.checked,
-      elapsed: elapsedMs()
-    };
+    var snapshot = C.makeSessionSnapshot(session, elapsedMs());
     try {
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
     } catch (err) {
       /* Private mode or a full quota: the session still runs in memory. */
     }
-  }
-
-  function finiteNumber(value) {
-    return typeof value === 'number' && isFinite(value);
   }
 
   /* Rebuild the session from sessionStorage. The bank is already loaded, so
@@ -232,122 +276,15 @@
     try {
       stored = sessionStorage.getItem(SESSION_KEY);
       if (stored) raw = JSON.parse(stored);
-    } catch (err) { raw = null; }
+    } catch (err) { clearStoredSession(); return; }
     if (stored == null) return;
-    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
-      clearStoredSession();
-      return;
-    }
 
-    var cfg = raw.cfg;
-    var mode = cfg && cfg.mode;
-    var valid = !!cfg && typeof cfg.setId === 'string' && !!cfg.setId &&
-      (mode === 'practice' || mode === 'review' || mode === 'retry') &&
-      finiteNumber(cfg.length) && Math.floor(cfg.length) === cfg.length &&
-      cfg.length >= 1 && cfg.length <= 50 &&
-      (cfg.unitId == null || typeof cfg.unitId === 'string') &&
-      Array.isArray(raw.ids) && finiteNumber(raw.index) &&
-      Math.floor(raw.index) === raw.index && raw.index >= 0 &&
-      raw.index <= raw.ids.length &&
-      Array.isArray(raw.results) && typeof raw.checked === 'boolean' &&
-      finiteNumber(raw.elapsed) && raw.elapsed >= 0 &&
-      (raw.selected == null || (finiteNumber(raw.selected) &&
-        Math.floor(raw.selected) === raw.selected && raw.selected >= 0)) &&
-      Array.isArray(raw.excluded);
-    if (!valid) { clearStoredSession(); return; }
-
-    var unitId = cfg.unitId || '';
-    var set = C.findSet(state, SOURCE_SETS, cfg.setId);
+    var cfg = raw && raw.cfg;
+    var set = C.findSet(state, SOURCE_SETS, cfg && cfg.setId);
     if (!set) { clearStoredSession(); return; }
-    if (unitId && !C.unitOf(set, unitId)) { clearStoredSession(); return; }
-
-    var pool = C.questionsOf(set, unitId);
-    var byId = {};
-    pool.forEach(function (question) { byId[question.id] = question; });
-    var questions = [];
-    var seen = {};
-    for (var i = 0; i < raw.ids.length; i++) {
-      var id = raw.ids[i];
-      if (typeof id !== 'string' || !byId[id] || seen[id]) {
-        clearStoredSession();
-        return;
-      }
-      seen[id] = true;
-      questions.push(byId[id]);
-    }
-
-    var results = [];
-    var resultByIndex = {};
-    for (var j = 0; j < raw.results.length; j++) {
-      var rec = raw.results[j];
-      var pos = rec && rec.index;
-      if (!rec || typeof rec !== 'object' || !finiteNumber(pos) ||
-          Math.floor(pos) !== pos || pos < 0 || pos >= questions.length ||
-          questions[pos].id !== rec.questionId ||
-          typeof rec.chosen !== 'string' || typeof rec.expected !== 'string' ||
-          typeof rec.correct !== 'boolean' ||
-          (rec.coin !== 'new' && rec.coin !== 'repeat' && rec.coin !== 'miss') ||
-          !finiteNumber(rec.pointsBefore) || !finiteNumber(rec.pointsAfter) ||
-          !finiteNumber(rec.pointsDelta) || !finiteNumber(rec.boxBefore) ||
-          !finiteNumber(rec.boxAfter) || !finiteNumber(rec.streak) ||
-          resultByIndex[pos]) {
-        clearStoredSession();
-        return;
-      }
-      var record = {
-        index: pos,
-        questionId: rec.questionId,
-        question: questions[pos],
-        chosen: rec.chosen,
-        expected: rec.expected,
-        correct: rec.correct,
-        coin: rec.coin,
-        pointsBefore: rec.pointsBefore,
-        pointsAfter: rec.pointsAfter,
-        pointsDelta: rec.pointsDelta,
-        boxBefore: rec.boxBefore,
-        boxAfter: rec.boxAfter,
-        streak: rec.streak
-      };
-      results.push(record);
-      resultByIndex[pos] = record;
-    }
-    /* A checked cursor without its graded record could not paint feedback.
-     * At the results screen the cursor sits past the last question, so there
-     * is no record at its index. */
-    if (raw.checked && raw.index < questions.length && !resultByIndex[raw.index]) {
-      clearStoredSession();
-      return;
-    }
-
-    var excluded = {};
-    for (var k = 0; k < raw.excluded.length; k++) {
-      var crossed = raw.excluded[k];
-      if (!finiteNumber(crossed) || Math.floor(crossed) !== crossed || crossed < 0) {
-        clearStoredSession();
-        return;
-      }
-      excluded[crossed] = true;
-    }
-    var selected = raw.selected == null ? null : raw.selected;
-    if (selected != null && raw.index < questions.length &&
-        selected >= C.choicesFor(questions[raw.index]).length) {
-      clearStoredSession();
-      return;
-    }
-
-    session = {
-      cfg: { setId: cfg.setId, unitId: unitId, mode: mode, length: cfg.length },
-      set: set,
-      questions: questions,
-      index: raw.index,
-      results: results,
-      selected: selected,
-      excluded: excluded,
-      checked: raw.checked,
-      elapsed: raw.elapsed,
-      runningSince: null
-    };
+    var restored = C.restoreSessionSnapshot(raw, set);
+    if (!restored) { clearStoredSession(); return; }
+    session = restored;
   }
 
   /* Read the server's copy at boot. A newer (or equal) disk state wins; a 204
@@ -361,6 +298,13 @@
       if (response.status === 204) {
         PERSISTENCE_MODE = 'disk';
         pushProgress();
+        return;
+      }
+      if (response.status === 500) {
+        /* The file exists but cannot be read. Keep the browser copy and let
+         * the next save replace the file; do not fall back to browser mode. */
+        PERSISTENCE_MODE = 'disk';
+        diskUnreadable = true;
         return;
       }
       if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -711,17 +655,17 @@
   async function loadBank() {
     SOURCE_SETS = [];
     LOAD_ERRORS = [];
-    if (location.protocol === 'file:') {
-      LOAD_ERRORS.push('This page was opened from disk. Browsers block reading ' +
-        'questions/index.json over file://. Serve the repository root over HTTP and open /app/.');
-      return;
-    }
     var indexUrl = new URL(BANK_URL, location.href);
     var index;
     try {
       index = await fetchJSON(indexUrl);
     } catch (err) {
-      LOAD_ERRORS.push('Could not read ' + indexUrl.pathname + ': ' + err.message);
+      var message = 'Could not read ' + indexUrl.pathname + ': ' + err.message;
+      if (location.protocol === 'file:') {
+        message += ' Most browsers block reading local JSON from file://; ' +
+          'serve the repository with ./qt and open /app/.';
+      }
+      LOAD_ERRORS.push(message);
       return;
     }
     if (!index || typeof index !== 'object' || Array.isArray(index) ||
@@ -776,6 +720,13 @@
       html += '<div class="warnbox"><b>Disk mirror failed</b>' +
         '<p>Progress is saved in this browser only; the server mirror did not accept ' +
         'the last write.</p></div>';
+    }
+    if (PERSISTENCE_MODE === 'disk' && diskUnreadable) {
+      html += '<div class="warnbox"><b>Progress file could not be read</b>' +
+        '<p>The server could not read the progress file, so your browser copy is safe ' +
+        'and in use. The next save replaces the unreadable file after keeping it as ' +
+        '<code>.bak</code>. You can repair it now in ' +
+        '<a href="#/settings">Settings → Progress data</a>.</p></div>';
     }
     return html;
   }
@@ -942,9 +893,7 @@
   /* One unit inside a set card: its mastery and coverage, what is due, and the
    * same three options a set has. */
   function unitRowHTML(row) {
-    var meta = row.points + '% mastery · ' +
-      row.attempted + '/' + row.total + ' answered' +
-      (row.attempted ? ' · ' + row.accuracy + '% first try' : '');
+    var meta = metaText(row);
     return '<li class="unit-row">' +
       '<div class="unit-head"><b>' + esc(row.title) + '</b>' +
         (row.due ? '<span class="tag due">' + row.due + ' due</span>' : '') + '</div>' +
@@ -977,9 +926,7 @@
           '</span></div>' +
         (row.description ? '<p class="muted small">' + esc(row.description) + '</p>' : '') +
         '<div class="bar tier-' + tier.key + '"><i style="width:' + row.points + '%"></i></div>' +
-        '<div class="meta">' + row.points + '% mastery · ' +
-          row.attempted + '/' + row.total + ' answered · ' +
-          row.accuracy + '% first try ' + due + '</div>' +
+        '<div class="meta">' + metaText(row) + (due ? ' ' + due : '') + '</div>' +
         '<div class="row set-actions">' +
           '<a class="btn btn-sm btn-primary" href="' + practiceHref(row.id, null, null) +
             '">Practice</a>' +
@@ -1096,9 +1043,11 @@
     var active = C.activeSets(state, SOURCE_SETS);
     var archived = C.archivedSets(state);
     var all = C.allSets(state, SOURCE_SETS);
-    var stats = C.overallStats(state, all);
+    var now = Date.now();
+    var allRows = C.allSetStats(state, all, now);
+    var stats = C.statsFromRows(state, allRows, now);
     var due = activeDue();
-    var rows = active.map(function (set) { return C.setStats(state, set, Date.now()); });
+    var rows = active.map(function (set) { return C.setStats(state, set, now); });
 
     var html = '<div class="hero">' +
       '<div class="card"><h1>Question Trainer</h1>' +
@@ -1209,9 +1158,8 @@
         '</div>' +
         '<div class="bar tier-' + row.tier.key + '"><i style="width:' + row.points +
           '%"></i></div>' +
-        '<div class="meta">' + row.points + '% mastery · ' +
-          row.attempted + '/' + row.total + ' answered · ' +
-          row.accuracy + '% first try' + (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
+        '<div class="meta">' + metaText(row) +
+          (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
         '<div class="row set-actions">' +
           '<a class="btn btn-sm btn-primary" href="' + practiceHref(row.id, null, null) +
             '">Practice</a>' +
@@ -1225,8 +1173,7 @@
         ? '<div class="set-units"><h4>Units</h4><ul class="unit-list">' +
           row.unitRows.map(function (unitRow) {
             return '<li class="unit-row"><div class="unit-head"><b>' + esc(unitRow.title) +
-              '</b></div><div class="meta small">' + unitRow.points + '% mastery · ' +
-              unitRow.attempted + '/' + unitRow.total + ' answered' +
+              '</b></div><div class="meta small">' + metaText(unitRow) +
               (unitRow.due ? ' · ' + unitRow.due + ' due' : '') +
               '</div></li>';
           }).join('') + '</ul></div>'
@@ -1244,9 +1191,7 @@
           esc(fmtDate(entry.archivedAt)) + '.</p>' +
         '<div class="bar tier-' + row.tier.key + '" title="' + row.points +
           '% mastery"><i style="width:' + row.points + '%"></i></div>' +
-        '<div class="meta">' + row.points + '% mastery · ' +
-          row.attempted + '/' + row.total + ' answered' +
-          (row.attempted ? ' · ' + row.accuracy + '% first try' : '') +
+        '<div class="meta">' + metaText(row) +
           (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
         '<div class="row set-actions">' +
           '<button type="button" class="btn btn-sm btn-primary" data-restore-unit="' +
@@ -1959,18 +1904,59 @@
     render();
   }
 
+  /* Trouble rows come from allSets(), archived history included. A practice
+   * button may only offer questions the resolved set still exposes: an
+   * archived unit of an active set (or a fully archived set) would otherwise
+   * build a preselected session that a reload cannot restore. */
+  function troublePracticeBySet() {
+    var groups = {};
+    lastTroubleRows.forEach(function (row) {
+      var set = C.findSet(state, SOURCE_SETS, row.set.id);
+      if (!set) return;
+      var questions = C.questionsOf(set);
+      var found = false;
+      for (var i = 0; i < questions.length; i++) {
+        if (questions[i].id === row.q.id) { found = true; break; }
+      }
+      if (!found) return;
+      if (!groups[set.id]) groups[set.id] = [];
+      groups[set.id].push(row);
+    });
+    return groups;
+  }
+
   function bindStatsButtons() {
     $$('[data-reset-set]', appEl).forEach(function (button) {
       button.addEventListener('click', function () {
         resetSetProgress(button.getAttribute('data-reset-set'));
       });
     });
+    $$('[data-practice-set]', appEl).forEach(function (button) {
+      button.addEventListener('click', function () {
+        var setId = button.getAttribute('data-practice-set');
+        var rows = troublePracticeBySet()[setId] || [];
+        var questions = rows.map(function (row) { return row.q; });
+        if (!questions.length) return;
+        var created = createSession({
+          setId: setId,
+          unitId: '',
+          mode: 'retry',
+          length: questions.length
+        }, questions);
+        if (!created) return;
+        var hash = '#/practice?set=' + encodeURIComponent(setId) +
+          '&mode=retry&n=' + questions.length;
+        if (location.hash === hash) render();
+        else location.hash = hash;
+      });
+    });
   }
 
   function renderStats() {
     var sets = C.allSets(state, SOURCE_SETS);
-    var stats = C.overallStats(state, sets);
-    var rows = C.allSetStats(state, sets);
+    var now = Date.now();
+    var rows = C.allSetStats(state, sets, now);
+    var stats = C.statsFromRows(state, rows, now);
     var days = C.activity(state, 14);
     var peak = days.reduce(function (n, day) { return Math.max(n, day.a); }, 0);
     var trouble = C.troubleSpots(state, sets, 8);
@@ -2009,13 +1995,32 @@
           esc(row.title) + '">Reset</button></td></tr>';
     }).join('') : '<tr><td colspan="8" class="muted">No sets loaded.</td></tr>';
 
-    var troubleHTML = trouble.length ? trouble.map(function (row) {
+    lastTroubleRows = trouble;
+    var practiceGroups = troublePracticeBySet();
+    var troubleSets = Object.keys(practiceGroups).map(function (setId) {
+      var groupRows = practiceGroups[setId];
+      return { id: setId, title: groupRows[0].set.title, n: groupRows.length };
+    });
+    var troubleButtons = troubleSets.map(function (entry) {
+      var label = entry.n === 1
+        ? 'Practice this question'
+        : 'Practice these ' + entry.n;
+      var aria = entry.n === 1
+        ? 'Practice this trouble question from ' + esc(entry.title)
+        : 'Practice these ' + entry.n + ' trouble questions from ' + esc(entry.title);
+      return '<button type="button" class="btn btn-sm" data-practice-set="' +
+        esc(entry.id) + '" aria-label="' + aria + '">' + label + '</button>';
+    }).join('');
+
+    var troubleHTML = (troubleButtons
+      ? '<div class="row" style="margin-bottom:.7rem">' + troubleButtons + '</div>'
+      : '') + (trouble.length ? trouble.map(function (row) {
       var where = esc(row.set.title) +
         (row.unit && row.unit.title !== row.set.title ? ' · ' + esc(row.unit.title) : '');
       return '<details class="review-item"><summary>' + where + ' — missed ' +
         row.wrong + ' of ' + row.attempts + ' attempts</summary>' +
         '<div style="margin-top:.7rem">' + staticQuestionHTML(row.q) + '</div></details>';
-    }).join('') : '<p class="muted small">No repeated misses yet.</p>';
+    }).join('') : '<p class="muted small">No repeated misses yet.</p>');
 
     appEl.innerHTML =
       '<div class="card"><h1>Your progress</h1>' +
@@ -2065,6 +2070,15 @@
         'may be lost on reload. Export your progress now, then free up storage.</p>';
     }
     if (PERSISTENCE_MODE === 'disk') {
+      if (diskUnreadable) {
+        html += '<p class="small warnline">The progress file at <code>' +
+          esc(PROGRESS_PATH || 'progress/progress.json') +
+          '</code> could not be read. Your browser copy is safe and is being used. ' +
+          'The next save replaces the unreadable file after keeping it as ' +
+          '<code>.bak</code>.</p>' +
+          '<div class="row"><button type="button" class="btn" id="repair-progress">' +
+          'Replace with browser copy</button></div>';
+      }
       html += diskPushFailed
         ? '<p class="small muted">Saved in this browser only; the server mirror at <code>' +
           esc(PROGRESS_PATH || 'progress/progress.json') +
@@ -2159,6 +2173,13 @@
       /* Switching it on chimes once, so the setting proves itself with the same
        * reward a first-time correct earns. */
       if (state.settings.sound) playVerdict({ correct: true, coin: 'new', streak: 0 });
+    });
+    var repair = document.getElementById('repair-progress');
+    if (repair) repair.addEventListener('click', function () {
+      diskUnreadable = false;
+      diskPushFailed = false;
+      pushProgress();
+      renderSettings(route);
     });
     $('#export').addEventListener('click', function () {
       var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
@@ -2256,7 +2277,7 @@
       '<h2>Set folder index fields</h2><table><thead><tr>' +
         '<th scope="col">Field</th><th scope="col"></th>' +
       '<th scope="col">Meaning</th></tr></thead><tbody>' +
-      '<tr><td><code>id</code></td><td>required</td><td>Stable, unique set id. Progress ' +
+      '<tr><td><code>id</code></td><td>optional</td><td>Stable, unique set id. Progress ' +
         'and archiving are keyed by it; it defaults to the folder name.</td></tr>' +
       '<tr><td><code>title</code></td><td>required</td><td>Name shown on the set card.</td></tr>' +
       '<tr><td><code>description</code></td><td>optional</td><td>Short line under the title.</td></tr>' +

@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const C = require('../app/core.js');
 
@@ -75,6 +76,19 @@ function seqRng(values) {
     i += 1;
     return value;
   };
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+/* Write a raw question record, bypassing applyAnswer so share/box combinations
+ * that practice ordering has to cope with can be set up directly. */
+function withRecord(state, setId, questionId, fields) {
+  state.q[C.questionKey(setId, questionId)] = Object.assign({
+    a: 1, c: 1, f: 1, s: 0, box: 0, due: NOW, last: NOW
+  }, fields);
+  return state;
 }
 
 /* ------------------------------------------------------------ session size */
@@ -362,7 +376,6 @@ test('applyAnswer: first-try correct starts a question at 80% and schedules revi
 
   assert.equal(result.correct, true);
   assert.equal(result.coin, 'new');
-  assert.equal(result.firstCorrect, true);
   assert.equal(state.totals.a, 1);
   assert.equal(state.totals.c, 1);
   assert.equal(C.masteryOf(state, set.id, set.questions), 80);
@@ -384,7 +397,6 @@ test('applyAnswer: repeated correct answers raise the question\'s share', () => 
 
   const result = C.applyAnswer(state, set.id, q1, 1, NOW + 2 * DAY);
   assert.equal(result.coin, 'repeat');
-  assert.equal(result.firstCorrect, false);
   assert.equal(C.masteryOf(state, set.id, set.questions), 90);
   const rec = state.q[C.questionKey(set.id, 'q1')];
   assert.equal(rec.box, 2);
@@ -423,7 +435,6 @@ test('applyAnswer: the "I don\'t know" choice is always a miss', () => {
   assert.equal(result.chosen, 'E');
   assert.equal(result.expected, 'B');
   assert.equal(result.coin, 'miss');
-  assert.equal(result.firstCorrect, false);
   assert.equal(result.boxAfter, 0);
   assert.equal(C.masteryOf(state, set.id, set.questions), 60);
   const rec = state.q[C.questionKey(set.id, 'q1')];
@@ -675,7 +686,6 @@ test('unitStats and setStats: units are reported inside the set', () => {
   assert.equal(unit.total, 2);
   assert.equal(unit.attempted, 1);
   assert.equal(unit.accuracy, 100);
-  assert.equal(unit.coverage, 50);
   assert.equal(unit.points, 40, 'the unit score averages only its own questions');
   assert.equal(unit.tier.key, 'familiar', 'the unit bar is tiered by its own score');
   assert.equal(unit.due, 0);
@@ -1001,7 +1011,6 @@ test('setStats and overallStats agree with the recorded answers', () => {
   const row = C.setStats(state, set, NOW + 2000);
   assert.equal(row.total, 2);
   assert.equal(row.attempted, 2);
-  assert.equal(row.correct, 2);
   assert.equal(row.correctFirstTry, 1);
   assert.equal(row.accuracy, 50);
   assert.equal(row.due, 0);
@@ -1185,4 +1194,470 @@ test('nextTheme: auto -> light -> dark -> auto and unknown values fall back to a
   assert.equal(C.nextTheme('neon'), 'light', 'an unknown value is treated as auto');
   assert.equal(C.nextTheme(undefined), 'light');
   assert.equal(C.nextTheme(null), 'light');
+});
+
+/* ------------------------------------------------- practice ordering */
+
+test('selectSession: a lower-share question outranks a lower box', () => {
+  const [set] = load(rawSet({
+    questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+  }));
+  const state = C.emptyState(NOW);
+  withRecord(state, set.id, 'q1', { s: 800, box: 0, a: 1 });
+  withRecord(state, set.id, 'q2', { s: 550, box: 1, a: 1 });
+
+  const picked = C.selectSession(state, set.id, set.questions, {
+    mode: 'practice', length: 2, rng: seqRng([0.9, 0.1]), now: NOW
+  });
+  assert.deepEqual(picked.map((item) => item.id), ['q2', 'q1'],
+    'the weaker question comes first even though its box is higher');
+});
+
+test('selectSession: unseen questions come first', () => {
+  const [set] = load(rawSet({
+    questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+  }));
+  const state = C.emptyState(NOW);
+  withRecord(state, set.id, 'q1', { s: 800, box: 1, a: 1 });
+
+  const picked = C.selectSession(state, set.id, set.questions, {
+    mode: 'practice', length: 2, rng: seqRng([0.9, 0.1]), now: NOW
+  });
+  assert.deepEqual(picked.map((item) => item.id), ['q2', 'q1']);
+});
+
+test('selectSession: equal shares break ties by box, recency, attempts, then rng', () => {
+  const [set] = load(rawSet({
+    questions: [
+      question({ id: 'q1' }), question({ id: 'q2' }),
+      question({ id: 'q3' }), question({ id: 'q4' })
+    ]
+  }));
+  const state = C.emptyState(NOW);
+  withRecord(state, set.id, 'q1', { s: 500, box: 1, a: 1 });
+  withRecord(state, set.id, 'q2', { s: 500, box: 0, a: 2 });
+  withRecord(state, set.id, 'q3', { s: 500, box: 0, a: 1 });
+  withRecord(state, set.id, 'q4', { s: 500, box: 0, a: 1 });
+
+  const picked = C.selectSession(state, set.id, set.questions, {
+    mode: 'practice', length: 4, rng: seqRng([0.5, 0.5, 0.1, 0.9]), now: NOW
+  });
+  assert.deepEqual(picked.map((item) => item.id), ['q3', 'q4', 'q2', 'q1'],
+    'box 0 before box 1, fewer attempts first, rng decides the last tie');
+});
+
+test('selectSession: equal shares break ties by recency before attempts', () => {
+  const [set] = load(rawSet({
+    questions: [
+      question({ id: 'q1' }), question({ id: 'q2' }),
+      question({ id: 'q3' }), question({ id: 'q4' })
+    ]
+  }));
+  const state = C.emptyState(NOW);
+  withRecord(state, set.id, 'q1', { s: 500, box: 0, a: 1, last: NOW });
+  withRecord(state, set.id, 'q2', { s: 500, box: 0, a: 5, last: NOW - DAY });
+  withRecord(state, set.id, 'q3', { s: 500, box: 0, a: 2, last: NOW });
+  withRecord(state, set.id, 'q4', { s: 500, box: 1, a: 1, last: NOW - DAY });
+
+  const picked = C.selectSession(state, set.id, set.questions, {
+    mode: 'practice', length: 4, rng: seqRng([0.5, 0.5, 0.5, 0.5]), now: NOW
+  });
+  assert.deepEqual(picked.map((item) => item.id), ['q2', 'q1', 'q3', 'q4'],
+    'the older question outranks the recent one even with more attempts');
+});
+
+test('selectSession: review order is still due-first, not mastery-first', () => {
+  const [set] = load(rawSet({
+    questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+  }));
+  const state = C.emptyState(NOW);
+  withRecord(state, set.id, 'q1', { s: 0, box: 0, a: 1, due: NOW + 2 * DAY });
+  withRecord(state, set.id, 'q2', { s: 900, box: 3, a: 5, due: NOW });
+
+  const review = C.selectSession(state, set.id, set.questions, {
+    mode: 'review', length: 10, now: NOW + 3 * DAY
+  });
+  assert.deepEqual(review.map((item) => item.id), ['q2', 'q1'],
+    'review sorts by due date only');
+
+  const practice = C.selectSession(state, set.id, set.questions, {
+    mode: 'practice', length: 2, rng: seqRng([0.5, 0.5]), now: NOW + 3 * DAY
+  });
+  assert.deepEqual(practice.map((item) => item.id), ['q1', 'q2'],
+    'practice would put the weaker q1 first');
+});
+
+/* -------------------------------------------- archived unit totals */
+
+test('allSets: archiving one unit keeps bankSize and seen steady', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[0], 1, NOW);
+  C.applyAnswer(state, set.id, set.units[1].questions[0], 1, NOW);
+
+  const before = C.overallStats(state, C.allSets(state, [set]), NOW + 1);
+  assert.equal(before.bankSize, 2);
+  assert.equal(before.seen, 2);
+
+  C.archiveUnit(state, set, set.units[1], NOW + 2);
+  assert.deepEqual(C.activeSets(state, [set])[0].units.map((unit) => unit.id), ['u1'],
+    'the active view still hides the archived unit');
+
+  const after = C.overallStats(state, C.allSets(state, [set]), NOW + 3);
+  assert.equal(after.bankSize, before.bankSize, 'the bank does not shrink');
+  assert.equal(after.seen, before.seen, 'seen does not move backwards');
+  assert.equal(after.setCount, 1);
+});
+
+test('allSets: a fully unit-archived set is still counted once', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[0], 1, NOW);
+  C.archiveUnit(state, set, set.units[0], NOW + 1);
+  C.archiveUnit(state, set, set.units[1], NOW + 2);
+
+  assert.deepEqual(C.activeSets(state, [set]), []);
+  const all = C.allSets(state, [set]);
+  assert.equal(all.length, 1, 'the set is still reported');
+  assert.equal(all[0].id, set.id);
+  assert.equal(all[0].title, 'Set One');
+  assert.deepEqual(all[0].units.map((unit) => unit.id).sort(), ['u1', 'u2']);
+
+  const stats = C.overallStats(state, all, NOW + 3);
+  assert.equal(stats.bankSize, 2);
+  assert.equal(stats.seen, 1);
+  assert.equal(stats.setCount, 1);
+});
+
+test('allSets: archiving the whole set does not double count its units', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, set, set.units[0], NOW + 1);
+  C.archiveUnit(state, set, set.units[1], NOW + 2);
+  C.archiveSet(state, set, NOW + 3);
+
+  assert.deepEqual(state.archivedUnits, {}, 'archiveSet absorbs the unit entries');
+  const all = C.allSets(state, [set]);
+  assert.equal(all.length, 1);
+
+  const total = all.reduce((n, row) => n + C.questionsOf(row).length, 0);
+  assert.equal(total, 2, 'each question is counted exactly once');
+
+  const stats = C.overallStats(state, all, NOW + 4);
+  assert.equal(stats.bankSize, 2);
+  assert.equal(stats.setCount, 1);
+});
+
+test('allSets: a set with active and archived units totals each question once', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.archiveUnit(state, set, set.units[0], NOW + 1);
+
+  const active = C.activeSets(state, [set]);
+  const archived = C.archivedSets(state);
+  const activeTotal = active.reduce((n, row) => n + C.questionsOf(row).length, 0);
+  const archivedTotal = archived.reduce((n, row) =>
+    n + (row.kind === 'unit' ? row.questions.length : C.questionsOf(row).length), 0);
+  const allTotal = C.allSets(state, [set])
+    .reduce((n, row) => n + C.questionsOf(row).length, 0);
+
+  assert.equal(activeTotal, 1);
+  assert.equal(archivedTotal, 1);
+  assert.equal(allTotal, activeTotal + archivedTotal,
+    'archived questions appear exactly once in the all-sets view');
+});
+
+/* --------------------------------------------------------- state merge */
+
+test('stampState: strictly increasing even when the clock stalls or steps back', () => {
+  const state = C.emptyState(NOW);
+  state.updated = NOW + 10;
+
+  assert.equal(C.stampState(state, NOW), NOW + 11, 'never below updated + 1');
+  assert.equal(state.updated, NOW + 11);
+  assert.equal(C.stampState(state, NOW + 100), NOW + 100, 'a newer clock wins');
+  assert.equal(C.stampState(state, NOW + 100), NOW + 101, 'same millisecond still advances');
+});
+
+test('mergeStates: the newer question record wins', () => {
+  const key = C.questionKey('set-1', 'q1');
+  const make = (last, a, s) => {
+    const state = C.emptyState(NOW);
+    state.q[key] = { a: a, c: a, f: 1, s: s, box: a > 1 ? 2 : 1,
+      due: NOW + DAY, last: last };
+    return state;
+  };
+
+  const newerLocal = C.mergeStates(make(NOW, 1, 800), make(NOW + DAY, 3, 1000), NOW + 2 * DAY);
+  assert.equal(newerLocal.q[key].last, NOW + DAY);
+  assert.equal(newerLocal.q[key].s, 1000);
+
+  const newerServer = C.mergeStates(make(NOW + DAY, 3, 1000), make(NOW, 1, 800), NOW + 2 * DAY);
+  assert.equal(newerServer.q[key].last, NOW + DAY);
+  assert.equal(newerServer.q[key].s, 1000);
+
+  const tied = C.mergeStates(make(NOW, 1, 800), make(NOW, 4, 900), NOW);
+  assert.equal(tied.q[key].a, 4, 'on equal last, the greater attempt count wins');
+  const tiedBack = C.mergeStates(make(NOW, 4, 900), make(NOW, 1, 800), NOW);
+  assert.equal(tiedBack.q[key].a, 4, 'ties fall back to the server when equal');
+});
+
+test('mergeStates: counters take the maximum of either side', () => {
+  const server = C.emptyState(NOW);
+  const local = C.emptyState(NOW);
+  const dayKey = '2026-09-29';
+
+  server.sets.id = { a: 5, c: 3, streak: 1 };
+  local.sets.id = { a: 4, c: 4, streak: 3 };
+  server.days[dayKey] = { a: 3, c: 1 };
+  local.days[dayKey] = { a: 2, c: 2 };
+  server.totals = { a: 10, c: 5, sessions: 2 };
+  local.totals = { a: 8, c: 8, sessions: 4 };
+
+  const merged = C.mergeStates(server, local, NOW + 1);
+  assert.deepEqual(merged.sets.id, { a: 5, c: 4, streak: 3 });
+  assert.deepEqual(merged.days[dayKey], { a: 3, c: 2 });
+  assert.deepEqual(merged.totals, { a: 10, c: 8, sessions: 4 });
+});
+
+test('mergeStates: local settings and archives win, inputs stay untouched', () => {
+  const [set] = load(rawSet());
+  const server = C.emptyState(NOW);
+  const local = C.emptyState(NOW);
+
+  local.settings = { length: 20, practiceAll: false, theme: 'dark', sound: false };
+  server.local['local-set'] = Object.assign(C.cloneSet(set), { id: 'local-set' });
+  local.local['local-set'] = Object.assign(C.cloneSet(set), { id: 'local-set', title: 'Local Wins' });
+  server.archived[set.id] = Object.assign(C.cloneSet(set), { archivedAt: NOW, title: 'Server Copy' });
+  local.archived[set.id] = Object.assign(C.cloneSet(set), { archivedAt: NOW, title: 'Local Copy' });
+
+  const serverBefore = clone(server);
+  const localBefore = clone(local);
+  const merged = C.mergeStates(server, local, NOW + 1);
+
+  assert.deepEqual(merged.settings, local.settings);
+  assert.equal(merged.local['local-set'].title, 'Local Wins');
+  assert.equal(merged.archived[set.id].title, 'Local Copy');
+  assert.deepEqual(server, serverBefore, 'the server input is not mutated');
+  assert.deepEqual(local, localBefore, 'the local input is not mutated');
+});
+
+test('mergeStates: the result is sanitized so archive invariants hold', () => {
+  const [set] = load(rawSet());
+  const local = C.emptyState(NOW);
+  local.local[set.id] = C.cloneSet(set);
+  local.archived[set.id] = Object.assign(C.cloneSet(set), { archivedAt: NOW });
+  local.archivedUnits[C.questionKey(set.id, 'u1')] = {
+    id: 'u1', title: 'U1', questions: [question({ id: 'q9' })],
+    setId: set.id, setTitle: 'Set One', archivedAt: NOW
+  };
+
+  const merged = C.mergeStates(C.emptyState(NOW), local, NOW + 1);
+  assert.equal(merged.local[set.id], undefined,
+    'an archived set is not also active');
+  assert.deepEqual(merged.archivedUnits, {},
+    'a unit of an archived set is not separately archived');
+  assert.equal(merged.created, NOW, 'creation time is the earlier one');
+});
+
+/* ------------------------------------------------------ session snapshot */
+
+function sessionFixture() {
+  const set = loadSet(rawSet({
+    id: 'u1',
+    questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+  }));
+  const state = C.emptyState(NOW);
+  const picked = C.selectSession(state, set.id, C.questionsOf(set), {
+    mode: 'practice', length: 2, rng: seqRng([0.1, 0.2]), now: NOW
+  });
+  const session = {
+    cfg: { setId: set.id, unitId: '', mode: 'practice', length: 2 },
+    set: set,
+    questions: picked,
+    index: 1,
+    results: [{
+      index: 0,
+      questionId: picked[0].id,
+      question: picked[0],
+      chosen: 'B',
+      expected: 'B',
+      correct: true,
+      coin: 'new',
+      pointsBefore: 0,
+      pointsAfter: 80,
+      pointsDelta: 80,
+      boxBefore: 0,
+      boxAfter: 1,
+      streak: 1
+    }],
+    selected: null,
+    excluded: {},
+    checked: false,
+    elapsed: 5000,
+    runningSince: null
+  };
+  return { set: set, session: session, snapshot: C.makeSessionSnapshot(session, 6500) };
+}
+
+test('makeSessionSnapshot/restoreSessionSnapshot: a session round-trips', () => {
+  const { set, session, snapshot } = sessionFixture();
+
+  assert.equal(snapshot.v, 1);
+  assert.deepEqual(snapshot.cfg, { setId: set.id, unitId: '', mode: 'practice', length: 2 });
+  assert.deepEqual(snapshot.ids, session.questions.map((q) => q.id));
+  assert.equal(snapshot.elapsed, 6500);
+  assert.equal(snapshot.checked, false);
+  assert.equal(snapshot.results[0].questionId, snapshot.ids[0]);
+
+  const restored = C.restoreSessionSnapshot(snapshot, set);
+  assert.ok(restored);
+  assert.deepEqual(restored.cfg, snapshot.cfg);
+  assert.equal(restored.set, set);
+  assert.deepEqual(restored.questions.map((q) => q.id), snapshot.ids);
+  assert.equal(restored.index, 1);
+  assert.equal(restored.results.length, 1);
+  assert.equal(restored.results[0].question.id, snapshot.ids[0]);
+  assert.equal(restored.results[0].coin, 'new');
+  assert.deepEqual(restored.excluded, {});
+  assert.equal(restored.checked, false);
+  assert.equal(restored.elapsed, 6500);
+  assert.equal(restored.runningSince, null);
+
+  const withExcluded = C.makeSessionSnapshot(
+    Object.assign({}, session, { excluded: { 2: true, 0: true, 3: false } }), 0);
+  assert.deepEqual(withExcluded.excluded, [0, 2], 'truthy keys only, sorted');
+
+  const unitSnapshot = C.makeSessionSnapshot(
+    Object.assign({}, session, { cfg: { setId: set.id, unitId: 'u1', mode: 'retry', length: 2 } }), 1);
+  assert.ok(C.restoreSessionSnapshot(unitSnapshot, set), 'a valid unit id resolves');
+  assert.equal(C.restoreSessionSnapshot(Object.assign({}, unitSnapshot, {
+    cfg: Object.assign({}, unitSnapshot.cfg, { unitId: 'nope' })
+  }), set), null, 'a missing unit is rejected');
+});
+
+test('restoreSessionSnapshot: malformed payloads are rejected', () => {
+  const { set, session, snapshot } = sessionFixture();
+  const bad = (mutate) => {
+    const copy = clone(snapshot);
+    mutate(copy);
+    return C.restoreSessionSnapshot(copy, set);
+  };
+
+  assert.equal(C.restoreSessionSnapshot(null, set), null);
+  assert.equal(C.restoreSessionSnapshot([], set), null);
+  assert.equal(C.restoreSessionSnapshot(snapshot, null), null);
+
+  assert.equal(bad((c) => { c.cfg = null; }), null);
+  assert.equal(bad((c) => { c.cfg.setId = ''; }), null);
+  assert.equal(bad((c) => { c.cfg.mode = 'bogus'; }), null);
+  assert.equal(bad((c) => { c.cfg.length = 0; }), null);
+  assert.equal(bad((c) => { c.cfg.length = 51; }), null);
+  assert.equal(bad((c) => { c.cfg.length = 1.5; }), null);
+  assert.equal(bad((c) => { c.cfg.unitId = 5; }), null);
+
+  assert.equal(bad((c) => { c.ids = [c.ids[0], c.ids[0]]; }), null, 'duplicate ids');
+  assert.equal(bad((c) => { c.ids[0] = 5; }), null, 'non-string id');
+  assert.equal(bad((c) => { c.ids[0] = 'not-in-set'; }), null, 'unknown id');
+
+  assert.equal(bad((c) => { c.index = c.ids.length + 1; }), null, 'index past the ids');
+  assert.equal(bad((c) => { c.index = 0.5; }), null);
+  assert.equal(bad((c) => { c.elapsed = -1; }), null);
+  assert.equal(bad((c) => { c.elapsed = 'soon'; }), null);
+  assert.equal(bad((c) => { c.checked = 1; }), null);
+  assert.equal(bad((c) => { c.results = 'nope'; }), null);
+
+  assert.equal(bad((c) => { c.results[0].questionId = 'wrong'; }), null);
+  assert.equal(bad((c) => { c.results[0].index = 99; }), null);
+  assert.equal(bad((c) => { c.results.push(clone(c.results[0])); }), null,
+    'duplicate result index');
+  assert.equal(bad((c) => { delete c.results[0].pointsAfter; }), null);
+  assert.equal(bad((c) => { c.results[0].coin = 'jackpot'; }), null);
+  assert.equal(bad((c) => { c.results[0].chosen = 2; }), null);
+
+  assert.equal(bad((c) => { c.checked = true; c.index = 0; c.results = []; }), null,
+    'a checked cursor with no graded record');
+  assert.equal(bad((c) => {
+    c.selected = C.choicesFor(session.questions[c.index === 0 ? 0 : 1]).length;
+  }), null, 'a selected choice past the list');
+  assert.equal(bad((c) => { c.selected = -1; }), null);
+
+  assert.equal(bad((c) => { c.excluded = [1.5]; }), null);
+  assert.equal(bad((c) => { c.excluded = [-1]; }), null);
+  assert.equal(bad((c) => { c.excluded = [1, '2']; }), null);
+});
+
+/* --------------------------------------------------- stats consolidation */
+
+test('statsFromRows: matches overallStats and the dead fields are gone', () => {
+  const [set] = load(rawSet({
+    questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+  }));
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.questions[0], 1, NOW);
+  C.applyAnswer(state, set.id, set.questions[1], 0, NOW);
+  C.applyAnswer(state, set.id, set.questions[1], 1, NOW + 1000);
+
+  const rows = C.allSetStats(state, [set], NOW + 2000);
+  assert.deepEqual(C.statsFromRows(state, rows, NOW + 2000),
+    C.overallStats(state, [set], NOW + 2000));
+
+  const row = rows[0];
+  assert.equal(row.correct, undefined, 'setStats.correct is gone');
+  assert.equal(row.unitRows[0].correct, undefined, 'unitStats.correct is gone');
+  assert.equal(row.unitRows[0].coverage, undefined, 'unitStats.coverage is gone');
+  assert.equal(row.unitRows[0].unseen, undefined, 'unitStats.unseen is gone');
+
+  const answer = C.applyAnswer(state, set.id, set.questions[0], 1, NOW + 3000);
+  assert.equal(answer.firstCorrect, undefined, 'applyAnswer.firstCorrect is gone');
+});
+
+/* ---------------------------------------------------------- DST buckets */
+
+test('activity/streak: local days survive DST transitions', { skip: process.platform === 'win32' }, () => {
+  const corePath = path.resolve(__dirname, '..', 'app', 'core.js');
+  const script = `
+    const C = require(${JSON.stringify(corePath)});
+    const activityState = C.emptyState(0);
+    ['2026-03-05','2026-03-06','2026-03-07','2026-03-08','2026-03-09'].forEach(function (key) {
+      activityState.days[key] = { a: 1, c: 1 };
+    });
+    const streakState = C.emptyState(0);
+    streakState.days['2026-03-08'] = { a: 1, c: 1 };
+    streakState.days['2026-03-09'] = { a: 1, c: 1 };
+    const springNow = new Date(2026, 2, 9, 0, 30).getTime();
+    const fallNow = new Date(2026, 10, 2, 0, 30).getTime();
+    console.log(JSON.stringify({
+      spring: C.activity(activityState, 5, springNow).map(function (row) { return row.date; }),
+      streak: C.streak(streakState, springNow),
+      fall: C.activity(activityState, 5, fallNow).map(function (row) { return row.date; })
+    }));
+  `;
+  const child = spawnSync(process.execPath, ['-e', script], {
+    env: Object.assign({}, process.env, { TZ: 'America/New_York' }),
+    encoding: 'utf8'
+  });
+  assert.equal(child.status, 0, child.stderr);
+
+  const out = JSON.parse(child.stdout);
+  assert.deepEqual(out.spring,
+    ['2026-03-05', '2026-03-06', '2026-03-07', '2026-03-08', '2026-03-09'],
+    'the spring-forward date is neither skipped nor repeated');
+  assert.equal(out.streak, 2, 'Mar 8 and Mar 9 count as two consecutive days');
+  assert.deepEqual(out.fall,
+    ['2026-10-29', '2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02'],
+    'the fall-back window has no duplicate local keys');
+  assert.equal(new Set(out.fall).size, out.fall.length);
 });

@@ -276,6 +276,23 @@ class TestServer(unittest.TestCase):
                 status, _, _ = http_request(method, server.base + candidate)
                 self.assertEqual(404, status, f"{method} {candidate}")
 
+    def test_repository_progress_directory_is_private_with_custom_path(self) -> None:
+        directory = ROOT / "progress"
+        directory.mkdir(exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix="serve-test-", suffix=".json", dir=str(directory), delete=False
+        ) as handle:
+            placeholder = Path(handle.name)
+        self.addCleanup(placeholder.unlink, missing_ok=True)
+        server = self.start_server()  # custom progress path lives in tmp
+        route = f"/progress/{placeholder.name}"
+        for method in ("GET", "HEAD"):
+            status, headers, body = http_request(method, server.base + route)
+            self.assertEqual(404, status, f"{method} {route}")
+            self.assertIn("application/json", headers.get("Content-Type", ""))
+            if method == "HEAD":
+                self.assertEqual(b"", body)
+
     # -- security headers ----------------------------------------------
     def test_security_headers_are_on_every_response(self) -> None:
         server = self.start_server()
@@ -320,6 +337,63 @@ class TestServer(unittest.TestCase):
         self.assertEqual(204, self.post(server, second)[0])
         self.assertEqual(first, json.loads(backup.read_text(encoding="utf-8")))
         self.assertEqual(second, json.loads(path.read_text(encoding="utf-8")))
+
+    def test_stale_post_is_rejected_without_backup(self) -> None:
+        server = self.start_server()
+        path, backup = self.progress_files()
+        newer = progress_state(2)
+        self.assertEqual(204, self.post(server, newer)[0])
+        status, headers, body = self.post(server, progress_state(1))
+        self.assertEqual(409, status)
+        self.assertIn("application/json", headers.get("Content-Type", ""))
+        self.assertEqual(CONTENT_SECURITY_POLICY,
+                         headers.get("Content-Security-Policy"))
+        self.assertEqual("nosniff", headers.get("X-Content-Type-Options"))
+        conflict = json.loads(body)
+        self.assertIn("error", conflict)
+        self.assertEqual(2, conflict["current"])
+        self.assertEqual(newer, json.loads(path.read_text(encoding="utf-8")))
+        self.assertFalse(backup.exists())
+
+    def test_identical_post_is_a_no_op(self) -> None:
+        server = self.start_server()
+        path, backup = self.progress_files()
+        state = progress_state(2)
+        self.assertEqual(204, self.post(server, state)[0])
+        before = path.read_bytes()
+        status, _, body = self.post(server, state)
+        self.assertEqual(204, status)
+        self.assertEqual(b"", body)
+        self.assertEqual(before, path.read_bytes())
+        self.assertFalse(backup.exists())
+
+    def test_conflicting_same_updated_is_rejected(self) -> None:
+        server = self.start_server()
+        path, backup = self.progress_files()
+        stored = progress_state(2)
+        self.assertEqual(204, self.post(server, stored)[0])
+        before = path.read_bytes()
+        conflicting = progress_state(2)
+        conflicting["q"] = {"other": {"a": 1}}
+        status, headers, body = self.post(server, conflicting)
+        self.assertEqual(409, status)
+        self.assertIn("application/json", headers.get("Content-Type", ""))
+        self.assertEqual(2, json.loads(body)["current"])
+        self.assertEqual(before, path.read_bytes())
+        self.assertFalse(backup.exists())
+
+    def test_newer_post_replaces_state_and_backs_up_previous(self) -> None:
+        server = self.start_server()
+        path, backup = self.progress_files()
+        previous = progress_state(2)
+        self.assertEqual(204, self.post(server, previous)[0])
+        self.assertFalse(backup.exists())
+        newer = progress_state(3)
+        status, _, body = self.post(server, newer)
+        self.assertEqual(204, status)
+        self.assertEqual(b"", body)
+        self.assertEqual(previous, json.loads(backup.read_text(encoding="utf-8")))
+        self.assertEqual(newer, json.loads(path.read_text(encoding="utf-8")))
 
     def test_corrupt_primary_recovers_from_backup(self) -> None:
         server = self.start_server()

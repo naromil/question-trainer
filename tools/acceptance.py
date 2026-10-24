@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -153,33 +154,71 @@ def load_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-@check("questions/index.json lists >= 2 set files that all parse")
+@check("questions/index.json lists >= 2 set folders whose contents are valid and unique")
 def question_index() -> str:
     need(INDEX.exists(), "questions/index.json is missing")
     index = load_json(INDEX)
-    files = index.get("files")
-    need(isinstance(files, list) and len(files) >= 2, "index.json needs a `files` array of >= 2 names")
-    need(not any("/" in name or "\\" in name for name in files), "index file names must be bare file names")
-    ids = []
-    for name in files:
-        path = ROOT / "questions" / name
-        need(path.exists(), f"questions/{name} is missing")
+    folders = index.get("sets")
+    need(isinstance(folders, list) and len(folders) >= 2,
+         "index.json needs a `sets` array of >= 2 folder names")
+    need(all(isinstance(name, str) and name for name in folders),
+         "every `sets` entry must be a non-empty string")
+    need(not any("/" in name or "\\" in name or name in (".", "..") for name in folders),
+         "set entries must be bare folder names")
+    need(len(set(folders)) == len(folders), f"duplicate set folders: {folders}")
+    set_ids = []
+    total_questions = 0
+    for folder in folders:
+        directory = ROOT / "questions" / folder
+        need(directory.is_dir(), f"questions/{folder}/ is missing")
+        path = directory / "index.json"
+        need(path.exists(), f"questions/{folder}/index.json is missing")
         data = load_json(path)
-        sets = data.get("sets") if isinstance(data.get("sets"), list) else [data]
-        need(sets, f"questions/{name} holds no set")
-        for item in sets:
-            need(isinstance(item.get("id"), str) and item["id"], f"{name}: set without an id")
-            need(isinstance(item.get("title"), str) and item["title"], f"{name}: set without a title")
-            qs = item.get("questions")
-            need(isinstance(qs, list) and qs, f"{name}: set without questions")
-            for q in qs:
-                need(isinstance(q.get("choices"), list) and len(q["choices"]) >= 2,
-                     f"{name}: a question has fewer than 2 choices")
-                need(isinstance(q.get("answer"), int) and 0 <= q["answer"] < len(q["choices"]),
-                     f"{name}: `answer` out of range")
-            ids.append(item["id"])
-    need(len(set(ids)) == len(ids), f"duplicate set ids across files: {ids}")
-    return f"{len(files)} files, {len(ids)} sets: {', '.join(ids)}"
+        need(isinstance(data, dict), f"questions/{folder}/index.json is not a JSON object")
+        set_id = data.get("id", folder)
+        need(isinstance(set_id, str) and set_id, f"{folder}: set without an id")
+        need(isinstance(data.get("title"), str) and data["title"].strip(),
+             f"{folder}: set without a title")
+        units = data.get("units")
+        need(isinstance(units, list) and units,
+             f"{folder}: `units` must be a non-empty array")
+        need(all(isinstance(name, str) and name for name in units),
+             f"{folder}: every unit must be a non-empty file name")
+        need(not any("/" in name or "\\" in name or name in (".", "..") for name in units),
+             f"{folder}: unit names must be bare file names")
+        need(len(set(units)) == len(units), f"{folder}: duplicate unit files: {units}")
+        set_ids.append(set_id)
+        question_ids = set()
+        for name in units:
+            unit_path = directory / name
+            need(unit_path.exists(), f"questions/{folder}/{name} is missing")
+            unit = load_json(unit_path)
+            need(isinstance(unit, dict), f"{folder}/{name} is not a JSON object")
+            need(isinstance(unit.get("id"), str) and unit["id"],
+                 f"{folder}/{name}: unit without an id")
+            need(isinstance(unit.get("title"), str) and unit["title"].strip(),
+                 f"{folder}/{name}: unit without a title")
+            questions = unit.get("questions")
+            need(isinstance(questions, list) and questions,
+                 f"{folder}/{name}: unit without questions")
+            for q in questions:
+                need(isinstance(q, dict), f"{folder}/{name}: a question is not an object")
+                qid = q.get("id")
+                need(isinstance(qid, str) and qid,
+                     f"{folder}/{name}: question without an id")
+                need(qid not in question_ids,
+                     f"{folder}/{name}: duplicate question id {qid!r} in the set")
+                question_ids.add(qid)
+                choices = q.get("choices")
+                need(isinstance(choices, list) and len(choices) >= 2,
+                     f"{folder}/{name}: a question has fewer than 2 choices")
+                answer = q.get("answer")
+                need(type(answer) is int and 0 <= answer < len(choices),
+                     f"{folder}/{name}: `answer` out of range")
+                total_questions += 1
+    need(len(set(set_ids)) == len(set_ids), f"duplicate set ids across folders: {set_ids}")
+    return (f"{len(folders)} folders, {len(set_ids)} sets, {total_questions} questions: "
+            f"{', '.join(set_ids)}")
 
 
 @check("questions/README.md documents the on-disk format in detail")
@@ -187,7 +226,8 @@ def questions_readme() -> str:
     need(QUESTIONS_README.exists(), "questions/README.md is missing")
     text = QUESTIONS_README.read_text(encoding="utf-8")
     need(len(text) >= 2000, f"questions/README.md is only {len(text)} chars")
-    for token in ("index.json", "files", "questions", "choices", "answer", "0-based", "id"):
+    for token in ("index.json", "sets", "units", "questions", "choices", "answer",
+                  "0-based", "id"):
         need(token in text, f"questions/README.md never mentions {token!r}")
     need("```" in text, "questions/README.md has no code block")
     return f"{len(text)} chars, {text.count('```') // 2} code blocks"
@@ -277,17 +317,22 @@ PROGRESS_FIXTURE = {
     "v": 1,
     "created": 1000,
     "updated": 2000,
-    "q": {"gate-set::gate-q": {"a": 1, "c": 1, "f": 1, "due": 0, "box": 1, "last": 2000}},
-    "sets": {"gate-set": {"streak": 1, "pts": 12}},
+    "q": {
+        "gate-set/gate-q": {
+            "a": 1, "c": 1, "f": 1, "s": 800, "box": 1, "due": 2000, "last": 2000
+        }
+    },
+    "sets": {"gate-set": {"a": 1, "c": 1, "streak": 1}},
     "local": {},
     "archived": {},
+    "archivedUnits": {},
     "days": {"2026-10-19": {"a": 1, "c": 1}},
     "settings": {"length": 10, "practiceAll": True, "theme": "auto", "sound": True},
     "totals": {"a": 1, "c": 1, "sessions": 1},
 }
 
 
-@check("serve.py serves the app and the split question files")
+@check("serve.py serves the app and every set folder's index and unit files")
 def server_static() -> str:
     need(SERVE.exists(), "serve.py is missing")
     with tempfile.TemporaryDirectory() as tmp:
@@ -297,13 +342,28 @@ def server_static() -> str:
             need(status == 200 and b"Question Trainer" in body, f"/app/ returned {status}")
             status, body = http("GET", base + "/questions/index.json")
             need(status == 200, f"/questions/index.json returned {status}")
-            names = json.loads(body)["files"]
-            for name in names:
-                status, _ = http("GET", base + f"/questions/{name}")
-                need(status == 200, f"/questions/{name} returned {status}")
+            index = json.loads(body)
+            folders = index.get("sets")
+            need(isinstance(folders, list) and folders,
+                 "served questions/index.json has no `sets` array")
+            files = 1
+            for folder in folders:
+                quoted = urllib.parse.quote(folder, safe="")
+                status, body = http("GET", base + f"/questions/{quoted}/index.json")
+                need(status == 200, f"/questions/{folder}/index.json returned {status}")
+                metadata = json.loads(body)
+                units = metadata.get("units")
+                need(isinstance(units, list) and units,
+                     f"/questions/{folder}/index.json lists no units")
+                files += 1
+                for unit in units:
+                    unit_url = base + f"/questions/{quoted}/{urllib.parse.quote(unit, safe='')}"
+                    status, _ = http("GET", unit_url)
+                    need(status == 200, f"/questions/{folder}/{unit} returned {status}")
+                    files += 1
         finally:
             stop(proc)
-        return f"app + {len(names)} question files"
+        return f"app + {len(folders)} set folders, {files} JSON files"
 
 
 @check("progress is written to the disk file and survives a server restart")
@@ -347,6 +407,68 @@ def server_progress_validation() -> str:
         finally:
             stop(proc)
         return f"invalid payload -> {status}"
+
+
+@check("stale progress writes are rejected; identical writes are no-ops")
+def server_progress_stale() -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        progress_file = Path(tmp) / "progress.json"
+        backup_file = progress_file.with_name(progress_file.name + ".bak")
+        proc, base = start_server(progress_file)
+        try:
+            def post(state: dict) -> int:
+                status, _ = http("POST", base + "/api/progress",
+                                 json.dumps(state).encode("utf-8"))
+                return status
+
+            fresh = dict(PROGRESS_FIXTURE, updated=2)
+            need(post(fresh) == 204, "a valid first write did not return 204")
+            need(progress_file.exists(), "the first write did not create the progress file")
+
+            stale = dict(PROGRESS_FIXTURE, updated=1)
+            need(post(stale) == 409,
+                 "a state with an older stamp was not rejected with 409")
+            on_disk = json.loads(progress_file.read_text(encoding="utf-8"))
+            need(on_disk == fresh, "a stale write changed the progress file")
+            need(not backup_file.exists(), "a stale write created a backup")
+
+            before = progress_file.stat()
+            need(post(fresh) == 204,
+                 "an identical state at the stored stamp did not return 204")
+            after = progress_file.stat()
+            need((before.st_ino, before.st_mtime_ns, before.st_size) ==
+                 (after.st_ino, after.st_mtime_ns, after.st_size),
+                 "an identical write rewrote the progress file")
+            need(not backup_file.exists(), "an identical write created a backup")
+
+            different = json.loads(json.dumps(fresh))
+            different["totals"]["a"] = 2
+            need(post(different) == 409,
+                 "different content at the stored stamp was not rejected with 409")
+            need(json.loads(progress_file.read_text(encoding="utf-8")) == fresh,
+                 "a rejected write changed the progress file")
+            need(not backup_file.exists(), "a rejected write created a backup")
+        finally:
+            stop(proc)
+        return "older stamp -> 409, identical -> 204 (no rewrite), same stamp changed -> 409"
+
+
+@check("the progress directory stays private even with a custom --progress path")
+def server_progress_private() -> str:
+    real = ROOT / "progress" / "progress.json"
+    need(real.exists(), "the repository's progress/progress.json is missing")
+    with tempfile.TemporaryDirectory() as tmp:
+        proc, base = start_server(Path(tmp) / "elsewhere.json")
+        try:
+            status, body = http("GET", base + "/progress/progress.json")
+            need(status == 404, f"GET /progress/progress.json returned {status}")
+            need(real.read_bytes() not in body,
+                 "the real progress file leaked in the 404 body")
+            status, _ = http("HEAD", base + "/progress/progress.json")
+            need(status == 404, f"HEAD /progress/progress.json returned {status}")
+        finally:
+            stop(proc)
+    return "GET and HEAD /progress/progress.json -> 404 with a custom progress path"
 
 
 # --------------------------------------------------------------------------
@@ -452,6 +574,86 @@ def dom_archive() -> str:
         need(re.search(r"<h1>Archive</h1>|<h2>Archive</h2>|Archived", dom) is not None,
              "archive page has no heading")
         return "archive route renders"
+
+
+def first_set_and_question() -> tuple[str, str, str]:
+    folders = load_json(INDEX).get("sets") or []
+    need(folders, "questions/index.json lists no set folders")
+    folder = folders[0]
+    data = load_json(ROOT / "questions" / folder / "index.json")
+    set_id = data.get("id") or folder
+    units = data.get("units") or []
+    need(units, f"questions/{folder}/index.json lists no units")
+    unit = load_json(ROOT / "questions" / folder / units[0])
+    questions = unit.get("questions") or []
+    need(questions, f"questions/{folder}/{units[0]} has no questions")
+    return set_id, questions[0]["id"], folder
+
+
+@check("stats page: a trouble spot offers Practice for its real set")
+def dom_trouble_practice() -> str:
+    set_id, question_id, folder = first_set_and_question()
+    key = urllib.parse.quote(set_id, safe="") + "/" + urllib.parse.quote(question_id, safe="")
+    fixture = {
+        "app": "question-trainer",
+        "v": 1,
+        "created": 1000,
+        "updated": 3000,
+        "q": {
+            key: {"a": 2, "c": 1, "f": 0, "s": 300, "box": 0, "due": 0, "last": 3000}
+        },
+        "sets": {set_id: {"a": 2, "c": 1, "streak": 0}},
+        "local": {},
+        "archived": {},
+        "archivedUnits": {},
+        "days": {},
+        "settings": {"length": 10, "practiceAll": True, "theme": "auto", "sound": True},
+        "totals": {"a": 2, "c": 1, "sessions": 0},
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        progress_file = Path(tmp) / "progress.json"
+        progress_file.write_text(json.dumps(fixture), encoding="utf-8")
+        proc, base = start_server(progress_file)
+        try:
+            dom = dump_dom(base + "/app/#/stats")
+        finally:
+            stop(proc)
+    need("Trouble spots" in dom, "the progress page lost its Trouble spots card")
+    need(f'data-practice-set="{set_id}"' in dom,
+         f"no trouble-spot Practice control for {folder} ({set_id})")
+    need(re.search(r'<button[^>]*data-practice-set="' + re.escape(set_id) +
+                   r'"[^>]*>\s*Practice', dom) is not None,
+         "the trouble-spot control is not a Practice button")
+    return f"{folder}: trouble spot for {question_id} offers Practice for {set_id}"
+
+
+@check("settings page: a corrupt progress file keeps disk mode and offers repair")
+def dom_repair_path() -> str:
+    with tempfile.TemporaryDirectory() as tmp:
+        progress_file = Path(tmp) / "progress.json"
+        progress_file.write_text("{ this is not json", encoding="utf-8")
+        backup_file = progress_file.with_name(progress_file.name + ".bak")
+        proc, base = start_server(progress_file)
+        try:
+            status, _ = http("GET", base + "/api/progress")
+            need(status == 500, f"GET /api/progress returned {status}, want 500")
+            dom = dump_dom(base + "/app/#/settings")
+        finally:
+            stop(proc)
+        need("Browser-only" not in dom,
+             "a 500 on the progress API made the app fall back to browser-only mode")
+        need(re.search(r"(?i)(could not be read|couldn't be read|cannot be read|"
+                       r"unreadable|not readable)", dom) is not None,
+             "the settings page never says the progress file could not be read")
+        need(progress_file.name in dom,
+             "the settings page does not name the progress file")
+        need('id="repair-progress"' in dom,
+             "settings has no repair button for the unreadable file")
+        need("Replace with browser copy" in dom,
+             "the repair button does not explain what it replaces")
+        need(not backup_file.exists(),
+             "the unreadable progress file gained a backup without a write")
+    return "corrupt file -> 500, disk mode kept, repair button offered"
 
 
 # --------------------------------------------------------------------------

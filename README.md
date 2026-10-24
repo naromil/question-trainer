@@ -27,7 +27,14 @@ write creates no backup.
 `GET /api/progress` normally serves the primary file, but when that file is
 missing or invalid it serves a valid backup and marks the response with
 `X-Progress-Source: backup`. A corrupt primary with no valid backup answers
-`500` rather than returning a state the server cannot trust.
+`500` rather than returning a state the server cannot trust; the app then keeps
+the browser copy, shows a banner, and the next save replaces the unreadable file
+after keeping it as `.bak`. **Settings → Progress data** also has an immediate
+repair button.
+
+Every progress write carries an `updated` stamp. The server rejects a stale or
+equal-but-different write with `409`; the page reads the newer copy, merges it,
+and retries once. Other tabs pick up saves through browser storage.
 
 ```bash
 ./qt --port 9000 --no-open          # another port; do not open a browser
@@ -39,9 +46,10 @@ missing or invalid it serves a valid backup and marks the response with
 `progress/progress.json`. `--host` defaults to `127.0.0.1` and `--port` to
 `8765`. `python3 serve.py` accepts the same flags.
 
-The server sends `/` and `/app` to `/app/`. Hidden files and the progress file
-(including its `.bak`) are never served, and a directory without an
-`index.html` answers `404` instead of listing its contents. Every response
+The server sends `/` and `/app` to `/app/`. Hidden files and the whole
+`progress/` directory (including any configured progress file and its `.bak`)
+are never served, and a directory without an `index.html` answers `404` instead
+of listing its contents. Every response
 carries a strict `Content-Security-Policy` plus `X-Frame-Options: DENY`,
 `Referrer-Policy: no-referrer` and a restrictive `Permissions-Policy`.
 
@@ -56,12 +64,12 @@ another program, it says so and exits non-zero.
 
 The page still works from a plain static server (for example
 `python3 -m http.server 8765` with `http://127.0.0.1:8765/app/`) or when opened
-from disk where the browser allows it. In that mode the progress API is not
-available, so everything stays in `localStorage`; **Settings → Progress data**
-says which mode is active.
+from disk if the browser permits reading local JSON files; most block it and the
+app names the file. In that mode the progress API is not available, so everything
+stays in `localStorage`; **Settings → Progress data** says which mode is active.
 
-Use **Settings → Export/Import JSON** to move progress between machines or
-origins.
+**Settings → Progress data** has separate **Export JSON** and **Import JSON**
+buttons to move progress between machines or origins.
 
 ## Application menu
 
@@ -85,7 +93,7 @@ removes the entry.
 | **Session** | One set, or one unit of it. An unfinished session survives a page reload — the same question, selection, cross-outs, answering clock and graded feedback — via `sessionStorage`, and restored feedback is never re-graded or counted twice. One question at a time with a progress rail, live mastery and streak chips, and an answering-time clock that pauses while you read feedback and while the tab is hidden. Choose with the mouse or <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd>, move between the choices with the arrow keys, and press <kbd>Enter</kbd> to check and again for the next question. Every question also offers a final **I don't know** choice, which is always graded wrong. Choices can be crossed out (and un-crossed) before answering. The question and its choices glide in; selecting a choice pops its letter, and grading marks the right row with a tick and a wrong pick with a cross. A right answer pays off on several channels at once — the stage glows green (amber while a streak runs), the card pulses, sparks burst from the tick, and both mastery totals count up — with a chord that lands an octave higher for a first-time correct and gains a note every few of a run. A miss tints the stage red, shakes the card and plays a low two-tone. Sound follows the setting; animation follows `prefers-reduced-motion`. Press <kbd>?</kbd> for the Keyboard shortcuts dialog: <kbd>A</kbd>–<kbd>Z</kbd>/<kbd>1</kbd>–<kbd>9</kbd> choose, the arrow keys move between the choices, <kbd>Enter</kbd> check/next, <kbd>Space</kbd> activate, <kbd>?</kbd> help, <kbd>Esc</kbd> close, and the mouse cross-out; Close or <kbd>Esc</kbd> dismisses it. |
 | **Results** | An animated score ring, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions** (inside the same unit when the session was unit-scoped). A strong score adds confetti and a rising chord. **Practice again** starts a clean practice run for the same set or unit, dropping any retry mode or count from the URL. |
 | **Archive** | Sets and single units you archived, with their progress and a saved copy of their questions. **Restore** puts a set or unit back on the active list. If the source is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. |
-| **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count for active sets, a 14-day activity chart, a per-set table with a **Reset** action, and repeated trouble spots. |
+| **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count for active sets, a 14-day activity chart, a per-set table with a **Reset** action, and repeated trouble spots with a **Practice these** button per set for a focused retry. |
 | **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. A theme quick-toggle in the top bar cycles auto/light/dark and stays in sync with the Settings theme select. If a browser or disk write fails, a banner names the copy at risk and the **Progress data** section repeats it; the page keeps working. |
 | **Format** | The in-app schema summary with an example; the full reference is [questions/README.md](questions/README.md). |
 
@@ -122,7 +130,9 @@ takes it higher.
 Leitner boxes. A correct answer promotes a question one box; a miss sends it back to box 0
 and makes it due immediately. Gaps between reviews: **1, 3, 7, 21** days.
 
-* **Practice** walks the whole set least-seen-first.
+* **Practice** walks the set lowest-mastery-first: stored mastery share, then Leitner
+  box, then least-recently-answered, then fewest attempts; unseen questions come
+  first and ties are randomised. It covers the whole set.
 * **Review** serves only questions that are due (so it can be shorter than the session
   length, and says so when nothing is due).
 * Due counters count active sets only. Archived sets keep their review dates and show
