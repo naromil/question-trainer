@@ -3,19 +3,23 @@
    Light theme is the default; [data-theme] on <html> switches to dark. */
 
 :root {
-  --blue: #1865f2;
+  --blue: #0f5ce0;
   --blue-dark: #0b4bc0;
   --blue-soft: #e6efff;
-  --green: #00893f;
+  --green: #00703a;
   --green-soft: #e3f6ea;
-  --red: #d92916;
+  --red: #c0230f;
   --red-soft: #fdeceb;
-  --amber: #b76d00;
+  --amber: #8a5200;
   --amber-soft: #fff4e0;
   --purple: #7d3ff2;
+  /* Label colour for text set on a solid accent fill. Dark themes flip it,
+     because their accents are light. */
+  --on-blue: #fff;
+  --on-purple: #fff;
   --ink: #1b1b1b;
   --ink-2: #4a4f57;
-  --ink-3: #6b7280;
+  --ink-3: #626b78;
   --line: #e2e5ea;
   --line-2: #cfd4dc;
   --bg: #f7f8fa;
@@ -41,6 +45,8 @@ html[data-theme="dark"] {
   --amber: #f0b34a;
   --amber-soft: #2c2110;
   --purple: #b48cff;
+  --on-blue: #0b1a33;
+  --on-purple: #14171c;
   --ink: #eef1f5;
   --ink-2: #b3bac4;
   --ink-3: #8b929c;
@@ -62,6 +68,7 @@ html[data-theme="dark"] {
     --red: #ff7a6b; --red-soft: #2d1614;
     --amber: #f0b34a; --amber-soft: #2c2110;
     --purple: #b48cff;
+    --on-blue: #0b1a33; --on-purple: #14171c;
     --ink: #eef1f5; --ink-2: #b3bac4; --ink-3: #8b929c;
     --line: #2b3038; --line-2: #3a4049;
     --bg: #14171c; --card: #1b1f26; --card-2: #22272f;
@@ -72,7 +79,36 @@ html[data-theme="dark"] {
   }
 }
 
+/* Native controls (selects, checkboxes, search clear buttons, scrollbars)
+   follow the theme. Auto stays light unless the OS prefers dark. */
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  html[data-theme="auto"] { color-scheme: dark; }
+}
+
 * { box-sizing: border-box; }
+
+/* Long file paths must not widen a card on a narrow screen. `break-word`
+   wraps a word only when it cannot fit, so short field names never split. */
+code { overflow-wrap: break-word; }
+
+/* One focus ring for every control; individual controls only adjust the
+   offset where their border would hide it. */
+:where(a, button, select, input, textarea, summary):focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a, .nav a, .btn, .theme-toggle, .shortcut-help, .elim, summary, select, input, textarea {
+    transition: background-color .16s ease, border-color .16s ease, color .16s ease,
+      box-shadow .16s ease;
+  }
+  .btn { transition: background-color .16s ease, border-color .16s ease, color .16s ease,
+    box-shadow .16s ease, transform .1s ease; }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+}
 
 body {
   margin: 0;
@@ -87,6 +123,12 @@ h1 { font-size: 1.65rem; letter-spacing: -.01em; }
 h2 { font-size: 1.15rem; }
 h3 { font-size: 1rem; }
 h4 { font-size: .82rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+/* The same small heading with a real h2 for pages that only have h1 and
+   unlabelled sections. */
+.section-label {
+  font-size: .82rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--ink-3); margin: 0 0 .4em;
+}
 p { margin: 0 0 .85em; }
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -115,7 +157,7 @@ kbd {
 .brand { display: flex; align-items: center; gap: .55rem; color: var(--ink); }
 .brand:hover { text-decoration: none; }
 .brand-mark {
-  background: var(--blue); color: #fff; font-weight: 700; font-size: .72rem;
+  background: var(--blue); color: var(--on-blue); font-weight: 700; font-size: .72rem;
   letter-spacing: .08em; padding: .3rem .45rem; border-radius: 7px;
 }
 .brand-text { font-weight: 650; font-size: .95rem; display: flex; flex-direction: column; line-height: 1.1; }
@@ -136,7 +178,7 @@ kbd {
 }
 .theme-toggle:hover { color: var(--ink); border-color: var(--ink-3); background: var(--card); }
 .theme-toggle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.pills { display: flex; gap: .4rem; }
+.pills { display: flex; gap: .4rem; flex-wrap: wrap; min-width: 0; }
 .pill {
   background: var(--card-2); border: 1px solid var(--line); border-radius: 999px;
   padding: .15rem .55rem; font-size: .78rem; color: var(--ink-2); white-space: nowrap;
@@ -145,6 +187,12 @@ kbd {
 
 .wrap { max-width: 1000px; margin: 0 auto; padding: 1.4rem 1rem 3rem; }
 .wrap:focus { outline: none; }
+/* A route change fades the new page in instead of snapping it into place. */
+#app.view-in { animation: view-in .26s cubic-bezier(.2, .7, .3, 1) both; }
+@keyframes view-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 
 .foot {
   max-width: 1000px; margin: 0 auto; padding: 0 1rem 2.5rem;
@@ -171,10 +219,16 @@ kbd {
 }
 .btn:hover { border-color: var(--ink-3); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-.btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-.btn-primary:hover { background: var(--blue-dark); border-color: var(--blue-dark); color: #fff; }
+.btn-primary { background: var(--blue); border-color: var(--blue); color: var(--on-blue); }
+.btn-primary:hover { background: var(--blue-dark); border-color: var(--blue-dark); color: var(--on-blue); }
+.btn-danger { border-color: var(--red); color: var(--red); }
+.btn-danger:hover { background: var(--red-soft); border-color: var(--red); }
 .btn-ghost { border-color: transparent; color: var(--blue); padding: .4rem .6rem; }
 .btn-ghost:hover { background: var(--card-2); }
+.btn-ghost.is-danger { color: var(--ink-3); }
+.btn-ghost.is-danger:hover, .btn-ghost.is-danger:focus-visible {
+  color: var(--red); background: var(--red-soft);
+}
 .btn-sm { font-size: .82rem; padding: .3rem .8rem; }
 .btn:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
@@ -188,7 +242,7 @@ kbd {
 .tag.proficient { background: var(--blue-soft); color: var(--blue); border-color: transparent; }
 .tag.mastered { background: var(--green-soft); color: var(--green); border-color: transparent; }
 .tag.warn { background: var(--amber-soft); color: var(--amber); border-color: transparent; }
-.tag.due { background: var(--purple); color: #fff; border-color: transparent; }
+.tag.due { background: var(--purple); color: var(--on-purple); border-color: transparent; }
 .tag.archived { background: var(--card-2); color: var(--ink-3); border-style: dashed; }
 
 .bar { height: 7px; background: var(--card-2); border-radius: 999px; overflow: hidden; }
@@ -289,25 +343,37 @@ kbd {
 .practice-view { max-width: 780px; margin: 0 auto; position: relative; }
 /* A quiet halo behind the question. Its colour follows the last verdict, so
    the stage turns green, red or amber before the feedback copy is read. */
+/* The halo's colour is a registered custom property, so changing the mood
+   fades it instead of snapping; `background` alone could not animate. */
+@property --aura {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
 .practice-view::before {
   content: ""; position: absolute; inset: -34px 0 auto; height: 320px; z-index: 0;
-  background: radial-gradient(72% 78% at 50% 0%, var(--aura, transparent), transparent 72%);
-  pointer-events: none; transition: background-color .5s ease;
+  background: radial-gradient(72% 78% at 50% 0%, var(--aura), transparent 72%);
+  pointer-events: none; --aura: transparent; transition: --aura .45s ease;
 }
 .practice-view > * { position: relative; z-index: 1; }
 .practice-view[data-mood="right"] { --aura: var(--aura-right); }
 .practice-view[data-mood="wrong"] { --aura: var(--aura-wrong); }
 .practice-view[data-mood="streak"] { --aura: var(--aura-streak); }
+.practice-view[data-mood="right"]::before { --aura: var(--aura-right); }
+.practice-view[data-mood="wrong"]::before { --aura: var(--aura-wrong); }
+.practice-view[data-mood="streak"]::before { --aura: var(--aura-streak); }
 #qcard { transition: box-shadow .5s ease; }
 .practice-view[data-mood] #qcard { box-shadow: var(--shadow), 0 18px 60px -30px var(--aura); }
 
 .prac-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .55rem; }
 /* A set plus a unit title can be long: keep it on one line and let it truncate
-   so the status chips stay on the same row. */
+   so the status chips stay on the same row. It is the page's h1 at body size. */
 .prac-head .head-title {
   min-width: 0; flex: 1 1 auto; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 1rem; font-weight: 650; line-height: 1.35; margin: 0;
 }
+.prac-head .head-title .head-mode { font-weight: 400; }
 .prac-tools { display: flex; gap: .4rem; align-items: center; margin-left: auto; }
 .prac-tools .pill { display: inline-flex; align-items: center; gap: .28rem; font-variant-numeric: tabular-nums; }
 .mastery-pill b { color: var(--ink); font-weight: 650; }
@@ -335,6 +401,7 @@ kbd {
 .stimulus ul { margin: 0 0 .85em; padding-left: 1.15rem; }
 .stimulus li { margin-bottom: .3em; }
 .stem { font-size: 1.1rem; font-weight: 650; margin: .9rem 0 .8rem; }
+.stem:focus, #results-title:focus { outline: none; }
 /* A question image sits between the passage and the stem. It never widens the
    card, and a failed load leaves a readable line instead of a broken icon. */
 .q-figure { margin: .9rem 0; }
@@ -367,6 +434,7 @@ kbd {
   background: none; border: 0; border-radius: var(--radius-sm);
   padding: .7rem .3rem .7rem .8rem; cursor: pointer;
 }
+.choice:focus-visible { outline-offset: -2px; }
 .choice .letter {
   flex: 0 0 1.7rem; height: 1.7rem; display: grid; place-items: center;
   border: 1.5px solid var(--line-2); border-radius: 50%; font-weight: 650; font-size: .85rem;
@@ -459,7 +527,9 @@ kbd {
   display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .6rem;
   margin-top: .75rem; padding-top: .7rem; border-top: 1px dashed var(--line);
 }
-.reward .mastery-now { color: var(--green); font-variant-numeric: tabular-nums; }
+.reward .mastery-now { color: var(--ink); font-variant-numeric: tabular-nums; }
+.reward .mastery-now.up { color: var(--green); }
+.reward .mastery-now.down { color: var(--red); }
 .mastery-delta {
   display: inline-block; min-width: 2.4rem; padding: .08rem .45rem; border-radius: 999px;
   font-weight: 700; font-size: .8rem; text-align: center; font-variant-numeric: tabular-nums;
@@ -617,15 +687,17 @@ kbd {
 .burst .spark-1 { background: var(--blue); border-radius: 50%; }
 .burst .spark-2 { background: var(--amber); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 
+/* One rule catches every present and future effect: no movement, no fades,
+   no staggered delays. The spark layer is removed outright. */
 @media (prefers-reduced-motion: reduce) {
-  #qcard.q-enter, #qcard.q-enter .choice-item, #qcard.fx-correct,
-  #qcard.fx-streak, #qcard.fx-wrong, .verdict .icon, .verdict .icon::after,
-  .streak-badge, .reward, .feedback, .feedback .explanation, .feedback .reward,
-  .choice-why, .choice-row.is-correct, .choice-row.is-wrong, .choice-row.selected .letter,
-  .dot.current, .result-row, .mastery-delta, .mastery-pill.is-up, .mastery-pill.is-down,
-  .streak-chip.pop, .score-ring.done, #action { animation: none; }
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
   .choice-row.live:hover { transform: none; }
-  .practice-view::before, #qcard { transition: none; }
   .burst { display: none; }
 }
 .choice-why {
@@ -674,6 +746,21 @@ pre.code {
 .shortcut-help:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 /* ---------------------------------------------------------------- tables */
+/* A wide table scrolls sideways inside its card, so it can never widen the
+   page on a phone. */
+.table-scroll {
+  position: relative;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+  margin: 0 -.25rem; padding: 0 .25rem .2rem;
+}
+.table-scroll table { min-width: 620px; }
+.table-scroll::-webkit-scrollbar { height: 8px; }
+.table-scroll::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 999px; }
+.table-scroll::-webkit-scrollbar-track { background: transparent; }
+.table-scroll:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.table-hint { display: none; }
+.table-hint.show { display: block; margin: .5rem 0 0; }
+
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); }
 th { font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); font-weight: 600; }
@@ -756,11 +843,22 @@ dialog.shortcuts h2 { margin-bottom: .75rem; }
 .shortcuts-actions { display: flex; justify-content: flex-end; margin-top: .85rem; }
 dialog.shortcuts button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
-label.field { display: flex; align-items: center; gap: .55rem; padding: .4rem 0; }
-label.field input { width: 1.05rem; height: 1.05rem; accent-color: var(--blue); }
+/* A settings row: the label text is one flex item and the control another.
+   Without the text wrapper, an inline <span> inside the label becomes a second
+   flex item and the sentence is laid out in columns. */
+label.field { display: flex; align-items: center; gap: .6rem; padding: .4rem 0; }
+label.field .field-text { flex: 1 1 auto; min-width: 0; }
+label.field.check { align-items: flex-start; }
+label.field > input[type="checkbox"] {
+  flex: none; width: 1.05rem; height: 1.05rem; margin: .24em 0 0; accent-color: var(--blue);
+}
+label.field > select { flex: none; margin-left: auto; }
 select, input[type="number"] {
   font: inherit; padding: .35rem .5rem; border-radius: 8px;
   border: 1px solid var(--line-2); background: var(--card); color: var(--ink);
+}
+select:focus-visible, input:focus-visible, textarea:focus-visible {
+  border-color: var(--blue);
 }
 textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radius: 8px;
   border: 1px solid var(--line-2); background: var(--card); color: var(--ink); padding: .5rem; }
@@ -774,7 +872,50 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   }
 }
 
+@media (max-width: 900px) {
+  /* The four top-bar groups no longer fit on one line: brand, nav and theme
+     stay together and the stat pills take a row of their own. */
+  .topbar-inner { gap: .5rem .75rem; }
+  .pills { order: 4; flex-basis: 100%; }
+}
+
+@media (max-width: 760px) {
+  /* Below this width the progress table needs help: it scrolls sideways, the
+     set name stays pinned, and the bar gives way to its numeric twin. */
+  .table-scroll .sets-table { min-width: 0; }
+  .sets-table th:nth-child(2), .sets-table td:nth-child(2) { display: none; }
+  .sets-table thead th:first-child, .sets-table tbody td:first-child {
+    position: sticky; left: 0; z-index: 1; background: var(--card);
+    box-shadow: 1px 0 0 var(--line);
+  }
+}
+
 @media (max-width: 620px) {
+  /* On a phone the brand and the theme button share the first row, the nav
+     scrolls on the second and the pills wrap on the third, instead of the
+     toggle being stranded alone between two full-width rows. */
+  .topbar-inner { gap: .45rem .75rem; }
+  .brand { order: 1; }
+  .theme-toggle { order: 2; margin-left: auto; }
+  .nav {
+    order: 3; flex: 1 0 100%; margin-left: 0;
+    overflow-x: auto; scrollbar-width: none; padding: 3px 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { white-space: nowrap; }
+  .pills { order: 4; flex: 1 0 100%; }
+
+  /* A one-unit card keeps its meta beside the buttons on desktop; on a phone
+     those buttons would squeeze the numbers into a narrow column, so the row
+     stacks instead. */
+  .set-card:not([data-multi]) .set-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "head" "desc" "bar" "meta" "actions";
+    row-gap: .5rem;
+  }
+  .set-card:not([data-multi]) .set-main > .set-actions { justify-content: flex-start; }
+
   h1 { font-size: 1.35rem; }
   .wrap { padding: 1rem .7rem 2.5rem; }
   .card { padding: .9rem; }
@@ -790,4 +931,14 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .score-ring { width: 92px; height: 92px; }
   .score-inner b { font-size: 1.25rem; }
   .review-chip { margin-left: 0; }
+  /* 16px stops iOS Safari from zooming the page when a control takes focus. */
+  .set-search input, .set-sort select, select, input[type="number"] { font-size: 16px; }
+}
+
+@media (pointer: coarse) {
+  .nav a { padding: .5rem .65rem; }
+  .btn-sm { padding: .4rem .85rem; }
+  .unit-actions .btn { padding: .35rem .7rem; }
+  .shortcut-help { width: 2rem; height: 2rem; }
+  .theme-toggle { width: 2.25rem; height: 2.25rem; }
 }

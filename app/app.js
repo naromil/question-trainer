@@ -48,6 +48,9 @@
   /* Home list controls survive re-renders of the page but not a reload. */
   var homeQuery = '';
   var homeSort = 'index';
+  /* Which hash was on screen for the last full render; a route change moves
+   * focus and the scroll position, an in-place re-render keeps both. */
+  var lastRenderedHash = null;
 
   /* ------------------------------------------------------------ helpers */
   var ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -343,10 +346,7 @@
       excluded: excluded,
       checked: raw.checked,
       elapsed: raw.elapsed,
-      runningSince: null,
-      /* The first paint after a reload keeps the cursor state and skips the
-       * entrance animation. */
-      restored: true
+      runningSince: null
     };
   }
 
@@ -896,6 +896,16 @@
   function render() {
     pauseTimer();
     var route = parseHash();
+    var hash = location.hash;
+    var routeChanged = lastRenderedHash !== null && hash !== lastRenderedHash;
+    lastRenderedHash = hash;
+    /* A hash navigation swaps the whole page under an unchanged document, so
+     * a keyboard or screen-reader user would otherwise be left on a control
+     * that no longer exists. Land on the main landmark before painting. */
+    if (routeChanged) {
+      var main = document.getElementById('main');
+      if (main) main.focus({ preventScroll: true });
+    }
     setActiveNav(route.path);
     renderNotice();
     renderPills();
@@ -913,7 +923,12 @@
     else if (route.path === '/format') renderFormat();
     else if (route.path === '/practice') renderPractice(route.params);
     else renderHome();
-    window.scrollTo(0, 0);
+    if (routeChanged) {
+      appEl.classList.remove('view-in');
+      void appEl.offsetWidth;
+      appEl.classList.add('view-in');
+      window.scrollTo(0, 0);
+    }
   }
 
   /* ------------------------------------------------------------ home */
@@ -1106,7 +1121,7 @@
         { value: 'due', label: 'Most due' }
       ];
       html += '<section class="set-list">' +
-        '<h2>Question sets<span id="set-list-count"></span></h2>' +
+        '<h2>Question sets<span id="set-list-count" aria-live="polite"></span></h2>' +
         '<div class="set-tools">' +
           '<label class="set-search"><span class="sr-only">Filter sets</span>' +
             '<input type="search" id="set-filter" placeholder="Filter sets" value="' +
@@ -1379,8 +1394,9 @@
       '<div class="practice-view" id="practice-view">' +
         '<div class="prac-head">' +
           '<a class="btn btn-ghost btn-sm" href="#/">← Sets</a>' +
-          '<div class="head-title"><b>' + esc(sessionTitle()) + '</b> <span class="muted small">· ' +
-            esc(modeLabel(session.cfg.mode)) + '</span></div>' +
+          '<h1 class="head-title">' + esc(sessionTitle()) +
+            ' <span class="muted small head-mode">· ' +
+            esc(modeLabel(session.cfg.mode)) + '</span></h1>' +
           '<div class="prac-tools">' +
             '<span class="pill mastery-pill" id="mastery-pill" title="Mastery of ' +
               esc(set.title) + ' averaged over all ' + questions.length + ' questions — ' +
@@ -1392,11 +1408,17 @@
             '<span class="pill timer-pill" id="timer">0:00</span>' +
           '</div>' +
         '</div>' +
-        '<div class="dots" id="dots"></div>' +
+        '<div class="dots" id="dots" aria-hidden="true"></div>' +
         '<div class="card" id="qcard"></div>' +
       '</div>';
 
-    showQuestion(session.index, session.restored);
+    /* A repaint of a session with progress must not reset the cursor: leaving
+     * for another route and coming back keeps the selection, the graded
+     * feedback and the crossed-out choices. A new session's first, untouched
+     * question still takes the entrance animation. */
+    var keep = session.index > 0 || session.checked || session.selected != null ||
+      Object.keys(session.excluded).length > 0 || session.results.length > 0;
+    showQuestion(session.index, keep);
   }
 
   function resultAt(index) {
@@ -1444,14 +1466,15 @@
   function choiceHTML(index, question, text) {
     var letter = letterFor(index);
     return '<div class="' + rowClass(index, question) + '">' +
-      '<button type="button" class="choice" data-i="' + index + '" aria-pressed="false">' +
+      '<button type="button" class="choice" role="radio" aria-checked="false" data-i="' +
+        index + '">' +
         '<span class="letter">' + letter + '</span>' +
         '<span class="choice-text">' + esc(text) + '</span></button>' +
       '<span class="choice-flag" aria-hidden="true"></span>' +
       elimHTML(index, letter) + '</div>';
   }
 
-  function showQuestion(index, keepState) {
+  function showQuestion(index, keepState, focusStem) {
     var question = session.questions[index];
     if (!keepState) {
       session.selected = null;
@@ -1482,13 +1505,14 @@
       '</div>' +
       passageHTML(question.passage) +
       figureHTML(question) +
-      '<div class="stem">' + esc(question.question) + '</div>' +
-      '<ul class="choices" id="choices">' + choices + '</ul>' +
+      '<div class="stem" tabindex="-1">' + esc(question.question) + '</div>' +
+      '<ul class="choices" id="choices" role="radiogroup" aria-label="Answer choices">' +
+        choices + '</ul>' +
       '<div class="actions">' +
         '<button type="button" class="btn btn-primary" id="action" disabled>' +
           'Check answer</button>' +
-        '<span class="kbdhint"><kbd>A</kbd>–<kbd>Z</kbd> choose · ' +
-          '<kbd>1</kbd>–<kbd>9</kbd> choose · <kbd>Enter</kbd> check / next</span>' +
+        '<span class="kbdhint"><kbd>A</kbd>–<kbd>Z</kbd> / <kbd>1</kbd>–<kbd>9</kbd> choose · ' +
+          '<kbd>Enter</kbd> check / next</span>' +
         '<button type="button" class="shortcut-help" id="shortcut-help"' +
           ' aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>' +
       '</div>' +
@@ -1533,19 +1557,34 @@
       session.excluded = {};
     }
     syncChoices();
+    /* A new question is announced by landing focus on its stem; the card was
+     * just rebuilt, so the previous focus target is gone. */
+    if (focusStem) {
+      var stem = $('.stem', card);
+      if (stem) stem.focus({ preventScroll: true });
+    }
     resumeTimer();
   }
 
-  /* Re-paint every row from the session state, including the cross-out buttons. */
+  /* Re-paint every row from the session state, including the cross-out buttons.
+   * The radiogroup keeps one tab stop: the chosen choice, or the first one
+   * that can still be chosen, so Tab enters the group instead of walking
+   * every option. */
   function syncChoices() {
     var question = session.questions[session.index];
+    var count = C.choicesFor(question).length;
+    var tabStop = session.selected != null ? session.selected : -1;
+    for (var j = 0; tabStop < 0 && j < count; j++) {
+      if (!session.excluded[j]) tabStop = j;
+    }
     $$('#choices .choice-row').forEach(function (row, i) {
       var letter = letterFor(i);
       var excluded = !!session.excluded[i];
       var label = (excluded ? 'Include' : 'Exclude') + ' choice ' + letter;
       row.className = rowClass(i, question);
       var choice = $('.choice', row);
-      choice.setAttribute('aria-pressed', String(i === session.selected));
+      choice.setAttribute('aria-checked', String(i === session.selected));
+      choice.tabIndex = !session.checked && i === tabStop ? 0 : -1;
       choice.disabled = session.checked;
       var elim = $('.elim', row);
       elim.disabled = session.checked;
@@ -1698,9 +1737,10 @@
     var signed = (record.pointsDelta > 0 ? '+' : '') + record.pointsDelta;
     var masteryClass = record.pointsDelta > 0 ? 'up'
       : (record.pointsDelta < 0 ? 'down' : 'flat');
-    var mastery = '<span class="mastery-delta ' + masteryClass + '">' + signed + '</span>' +
-      ' <span class="muted">mastery · <b class="mastery-now" id="mastery-now">' +
-        record.pointsAfter + '%</b></span>';
+    var mastery = '<span class="mastery-delta ' + masteryClass + '">' +
+      (record.pointsDelta === 0 ? 'no change' : signed) + '</span>' +
+      ' <span class="muted">mastery now <b class="mastery-now ' + masteryClass +
+        '" id="mastery-now">' + record.pointsAfter + '%</b></span>';
 
     var gapDays = C.SRS_INTERVALS_DAYS[record.boxAfter];
     var when = gapDays === 0
@@ -1714,9 +1754,10 @@
 
     document.getElementById('feedback').innerHTML =
       '<div class="feedback ' + (record.correct ? 'correct' : 'incorrect') + '">' +
-        '<div class="verdict"><span class="icon">' + (record.correct ? '✓' : '✗') + '</span>' +
+        '<div class="verdict"><span class="icon" aria-hidden="true">' +
+          (record.correct ? '✓' : '✗') + '</span>' +
           (record.correct
-            ? 'Correct' + (record.coin === 'repeat' ? ' (already answered right before)' : '')
+            ? 'Correct' + (record.coin === 'repeat' ? ' — you had this one right before' : '')
             : 'Not quite — the answer is ' + record.expected +
               (record.chosen !== record.expected ? ' (you chose ' + record.chosen + ')' : '')) +
           streakBadge +
@@ -1777,7 +1818,7 @@
     if (session.index >= session.questions.length) {
       renderResults();
     } else {
-      showQuestion(session.index);
+      showQuestion(session.index, false, true);
       persistSession();
     }
     window.scrollTo(0, 0);
@@ -1799,11 +1840,14 @@
       var question = r.question;
       return '<div class="result-row" style="--i:' + i + '">' +
         '<span class="n">' + (i + 1) + '</span>' +
-        '<span class="' + (r.correct ? 'ok' : 'no') + '">' + (r.correct ? '✓' : '✗') + '</span>' +
+        '<span class="' + (r.correct ? 'ok' : 'no') + '" aria-hidden="true">' +
+          (r.correct ? '✓' : '✗') + '</span>' +
+        '<span class="sr-only">' + (r.correct ? 'Correct' : 'Incorrect') + '</span>' +
         '<span class="grow">' + esc(question.question.slice(0, 80)) +
           (question.question.length > 80 ? '…' : '') + '</span>' +
-        '<span class="muted small">' + r.chosen +
-          (r.correct ? '' : ' → ' + r.expected) + '</span>' +
+        '<span class="muted small"><span class="sr-only">your answer </span>' + r.chosen +
+          (r.correct ? '' : ' <span aria-hidden="true">→</span>' +
+            '<span class="sr-only">, correct answer </span>' + r.expected) + '</span>' +
       '</div>';
     }).join('');
 
@@ -1818,7 +1862,8 @@
     var time = fmtTime(elapsedMs());
     appEl.innerHTML =
       '<div class="card"><div class="results-head"><div>' +
-        '<h1>Session complete</h1><div class="muted">' + esc(sessionTitle()) + ' · ' +
+        '<h1 id="results-title" tabindex="-1">Session complete</h1><div class="muted">' +
+        esc(sessionTitle()) + ' · ' +
         esc(modeLabel(session.cfg.mode)) + ' · ' + time + '</div></div>' +
         '<div class="score-ring tier-' + scoreTier + '" id="score-ring">' +
           '<div class="score-inner"><b id="score-value">0%</b><span>score</span></div>' +
@@ -1840,8 +1885,8 @@
       (deltas ? '<div class="row" style="margin-top:.7rem">' +
         '<span class="muted small">Mastery:</span>' + deltas + '</div>' : '') +
       '</div>' +
-      '<div class="card"><h3>Question by question</h3>' + rows + '</div>' +
-      (review ? '<div class="card"><h3>Review your misses</h3>' + review + '</div>' : '');
+      '<div class="card"><h2>Question by question</h2>' + rows + '</div>' +
+      (review ? '<div class="card"><h2>Review your misses</h2>' + review + '</div>' : '');
 
     animateScore(percent);
     playResults(percent);
@@ -1860,8 +1905,11 @@
         var target = practiceHref(setId, unitId, null);
         session = null;
         clearStoredSession();
-        if (location.hash === target) render();
-        else location.hash = target;
+        if (location.hash === target) {
+          render();
+          window.scrollTo(0, 0);
+          focusQuestionOrMain();
+        } else location.hash = target;
       });
     }
 
@@ -1878,10 +1926,18 @@
           '&mode=retry&n=' + questions.length;
         /* The hashchange handler renders the retry session; render directly
          * only when the URL is already the same and no event would fire. */
-        if (location.hash === target) render();
-        else location.hash = target;
+        if (location.hash === target) {
+          render();
+          window.scrollTo(0, 0);
+          focusQuestionOrMain();
+        } else location.hash = target;
       });
     }
+
+    /* The session view this replaces had focus on an action that no longer
+     * exists; land on the results heading so the outcome is announced. */
+    var title = document.getElementById('results-title');
+    if (title) title.focus({ preventScroll: true });
   }
 
   /* ------------------------------------------------------------ stats */
@@ -1914,16 +1970,22 @@
     var peak = days.reduce(function (n, day) { return Math.max(n, day.a); }, 0);
     var trouble = C.troubleSpots(state, sets, 8);
     var due = activeDue();
+    /* The chart is a 14-day window; its total must be the sum of those days,
+     * not the all-time answer count shown elsewhere on the page. */
+    var fortnight = days.reduce(function (n, day) { return n + day.a; }, 0);
+    var busiest = days.reduce(function (best, day) { return day.a > best.a ? day : best; }, days[0]);
 
-    var activity = '<div class="spark">' + days.map(function (day) {
+    var activity = '<div class="spark" aria-hidden="true">' + days.map(function (day) {
       var h = peak ? Math.round((day.a / peak) * 100) : 0;
       return '<div class="' + (day.a ? 'has' : '') + '" style="height:' + Math.max(h, 6) +
         '%" title="' + day.date + ': ' + plural(day.a, 'question') + ', ' + day.c +
         ' right"></div>';
     }).join('') + '</div>' +
     '<div class="spark-legend"><span>' + days[0].date + '</span>' +
-      '<span>' + stats.answered + ' answers total</span>' +
-      '<span>today</span></div>';
+      '<span>' + plural(fortnight, 'answer') + ' in 14 days</span>' +
+      '<span>today</span></div>' +
+    '<p class="sr-only">Last 14 days: ' + plural(fortnight, 'answer') + '; busiest day ' +
+      busiest.date + ' with ' + plural(busiest.a, 'answer') + '.</p>';
 
     var table = rows.length ? rows.map(function (row) {
       return '<tr><td>' + esc(row.title) +
@@ -1937,7 +1999,7 @@
         '<td class="num">' + row.attempted + '/' + row.total + '</td>' +
         '<td class="num">' + (row.attempted ? row.accuracy + '%' : '—') + '</td>' +
         '<td class="num">' + (row.due || '—') + '</td>' +
-        '<td class="num"><button type="button" class="btn btn-ghost btn-sm" ' +
+        '<td class="num"><button type="button" class="btn btn-ghost btn-sm is-danger" ' +
           'data-reset-set="' + esc(row.id) + '" aria-label="Reset progress for ' +
           esc(row.title) + '">Reset</button></td></tr>';
     }).join('') : '<tr><td colspan="8" class="muted">No sets loaded.</td></tr>';
@@ -1961,13 +2023,33 @@
         '<div class="stat"><b>' + stats.streak + '</b><span>day streak</span></div>' +
         '<div class="stat"><b>' + due + '</b><span>due now</span></div>' +
       '</div></div>' +
-      '<div class="card"><h3>Last 14 days</h3>' + activity + '</div>' +
-      '<div class="card"><h3>Sets</h3><table><thead><tr><th>Set</th><th></th>' +
-        '<th class="num">Mastery</th><th>Tier</th><th class="num">Seen</th>' +
-        '<th class="num">First try</th><th class="num">Due</th><th></th>' +
+      '<div class="card"><h2>Last 14 days</h2>' + activity + '</div>' +
+      '<div class="card"><h2>Sets</h2>' +
+        '<div class="table-scroll" role="region" aria-label="Set progress table" tabindex="-1">' +
+        '<table class="sets-table">' +
+        '<thead><tr>' +
+        '<th scope="col">Set</th><th scope="col"><span class="sr-only">Mastery bar</span></th>' +
+        '<th class="num" scope="col">Mastery</th><th scope="col">Tier</th>' +
+        '<th class="num" scope="col">Seen</th><th class="num" scope="col">First try</th>' +
+        '<th class="num" scope="col">Due</th>' +
+        '<th scope="col"><span class="sr-only">Actions</span></th>' +
         '</tr></thead><tbody>' + table + '</tbody></table></div>' +
-      '<div class="card"><h3>Trouble spots</h3>' + troubleHTML + '</div>';
+        '<p class="table-hint small muted" aria-hidden="true">' +
+          'Scroll sideways for more columns →</p></div>' +
+      '<div class="card"><h2>Trouble spots</h2>' + troubleHTML + '</div>';
     bindStatsButtons();
+    syncTableHint();
+  }
+
+  /* A sideways-scrolling table is only reachable by keyboard when it actually
+   * overflows; the hint next to it follows the same condition. */
+  function syncTableHint() {
+    var wrap = document.querySelector('.table-scroll');
+    if (!wrap) return;
+    var overflows = wrap.scrollWidth > wrap.clientWidth + 1;
+    wrap.setAttribute('tabindex', overflows ? '0' : '-1');
+    var hint = document.querySelector('.table-hint');
+    if (hint) hint.classList.toggle('show', overflows);
   }
 
   /* ------------------------------------------------------------ settings */
@@ -2007,27 +2089,31 @@
 
     appEl.innerHTML =
       '<div class="card"><h1>Settings</h1>' +
-      '<h4>Session</h4>' +
-      '<label class="field">Questions per session <select id="length">' +
-        lengths + '</select></label>' +
-      '<label class="field"><input type="checkbox" id="practice-all"' +
-        (state.settings.practiceAll !== false ? ' checked' : '') + '> Practice every ' +
-        'question in a set with 30 or fewer questions, regardless of the session length ' +
-        '<span class="muted small">(spaced review always serves only what is due)</span>' +
-        '</label>' +
-      '<label class="field">Theme <select id="theme">' +
+      '<h2 class="section-label">Session</h2>' +
+      '<label class="field"><span class="field-text">Questions per session</span>' +
+        '<select id="length">' + lengths + '</select></label>' +
+      '<label class="field check"><input type="checkbox" id="practice-all"' +
+        (state.settings.practiceAll !== false ? ' checked' : '') + '>' +
+        '<span class="field-text">Practice every question in a set with 30 or fewer ' +
+        'questions, regardless of the session length ' +
+        '<span class="muted small">(spaced review always serves only what is due)' +
+        '</span></span></label>' +
+      '<label class="field"><span class="field-text">Theme</span>' +
+        '<select id="theme">' +
         ['auto', 'light', 'dark'].map(function (theme) {
           return '<option value="' + theme + '"' +
             (state.settings.theme === theme ? ' selected' : '') + '>' + theme + '</option>';
         }).join('') + '</select></label>' +
-      '<h4 style="margin-top:1.1rem">Feedback</h4>' +
-      '<label class="field"><input type="checkbox" id="s-sound"' +
-        (state.settings.sound ? ' checked' : '') + '> Sound effect on a correct and on a ' +
-        'wrong answer <span class="muted small">(a right answer also pulses the card, throws ' +
+      '<h2 class="section-label" style="margin-top:1.1rem">Feedback</h2>' +
+      '<label class="field check"><input type="checkbox" id="s-sound"' +
+        (state.settings.sound ? ' checked' : '') + '>' +
+        '<span class="field-text">Sound effect on a correct and on a wrong answer ' +
+        '<span class="muted small">(a right answer also pulses the card, throws ' +
         'sparks from the tick, counts the new mastery up and chimes a note longer once a ' +
-        'streak is running; the clock pauses while you read the feedback either way)</span></label>' +
+        'streak is running; the clock pauses while you read the feedback either way)' +
+        '</span></span></label>' +
       '</div>' +
-      '<div class="card"><h3>Question data</h3>' +
+      '<div class="card"><h2>Question data</h2>' +
       '<p class="small muted">Loaded <b>' + SOURCE_SETS.length + '</b> ' +
         (SOURCE_SETS.length === 1 ? 'set' : 'sets') + ' with <b>' +
         SOURCE_SETS.reduce(function (n, set) { return n + C.unitsOf(set).length; }, 0) +
@@ -2037,15 +2123,15 @@
         ' <a href="#/format">JSON format</a>.</p>' +
       '<p class="small muted">There is no mixed practice: each session draws only from the ' +
         'set or unit you choose.</p></div>' +
-      '<div class="card"><h3>Progress data</h3>' +
+      '<div class="card"><h2>Progress data</h2>' +
       persistenceHTML() +
       '<p class="muted small">Back it up as JSON if you switch machines or clear site ' +
         'data. Archived sets are included in the export.</p>' +
-      '<div class="row"><button class="btn" id="export">Export JSON</button>' +
-        '<button class="btn" id="import-btn">Import JSON</button>' +
-        '<button class="btn" id="reset">Reset all data</button>' +
+      '<div class="row"><button type="button" class="btn" id="export">Export JSON</button>' +
+        '<button type="button" class="btn" id="import-btn">Import JSON</button>' +
+        '<button type="button" class="btn btn-danger" id="reset">Reset all data</button>' +
         '<input type="file" id="import-file" accept="application/json" hidden></div>' +
-      '<p class="small muted" id="note" style="margin-top:.7rem"></p>' +
+      '<p class="small muted" id="note" role="status" style="margin-top:.7rem"></p>' +
       '</div>';
 
     var note = document.getElementById('note');
@@ -2112,6 +2198,7 @@
       applyTheme();
       renderPills();
       renderSettings(route);
+      document.getElementById('main').focus({ preventScroll: true });
     });
   }
 
@@ -2161,15 +2248,17 @@
       'each unit is practised, reviewed and archived on its own, and the set as a whole has ' +
       'the same three options:</p>' +
       '<pre class="code">' + esc(unitExample) + '</pre>' +
-      '<h3>Set folder index fields</h3><table><thead><tr><th>Field</th><th></th>' +
-      '<th>Meaning</th></tr></thead><tbody>' +
+      '<h2>Set folder index fields</h2><table><thead><tr>' +
+        '<th scope="col">Field</th><th scope="col"></th>' +
+      '<th scope="col">Meaning</th></tr></thead><tbody>' +
       '<tr><td><code>id</code></td><td>required</td><td>Stable, unique set id. Progress ' +
         'and archiving are keyed by it; it defaults to the folder name.</td></tr>' +
       '<tr><td><code>title</code></td><td>required</td><td>Name shown on the set card.</td></tr>' +
       '<tr><td><code>description</code></td><td>optional</td><td>Short line under the title.</td></tr>' +
       '<tr><td><code>units</code></td><td>required</td><td>One or more bare unit file names ' +
         'in the same folder, in display order.</td></tr></tbody></table>' +
-      '<h3>Unit fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
+      '<h2>Unit fields</h2><table><thead><tr><th scope="col">Field</th>' +
+      '<th scope="col"></th><th scope="col">Meaning</th>' +
       '</tr></thead><tbody>' +
       '<tr><td><code>id</code></td><td>required</td><td>Unique within the set.</td></tr>' +
       '<tr><td><code>title</code></td><td>required</td><td>Name shown on the unit row.</td></tr>' +
@@ -2177,7 +2266,8 @@
       '<tr><td><code>questions</code></td><td>required</td><td>Non-empty array of question ' +
         'objects. Question ids must be unique across the whole set, because progress is ' +
         'keyed by set id plus question id.</td></tr></tbody></table>' +
-      '<h3>Question fields</h3><table><thead><tr><th>Field</th><th></th><th>Meaning</th>' +
+      '<h2>Question fields</h2><table><thead><tr><th scope="col">Field</th>' +
+      '<th scope="col"></th><th scope="col">Meaning</th>' +
       '</tr></thead><tbody>' +
       '<tr><td><code>id</code></td><td>required</td><td>Unique within the set. Stable ids ' +
         'keep progress attached when you edit the file.</td></tr>' +
@@ -2207,7 +2297,7 @@
       '<p class="small muted">A broken unit file is skipped and reported in the banner with ' +
       'its folder and file name; the rest of the set still loads. Duplicate or missing set ' +
       'ids are reported too.</p></div>' +
-      '<div class="card"><h3>Running it</h3>' +
+      '<div class="card"><h2>Running it</h2>' +
       '<p>Start the trainer from the repository root:</p>' +
       '<pre class="code">./qt' + '\n' +
       'http://127.0.0.1:8765/app/</pre>' +
@@ -2225,6 +2315,21 @@
   }
 
   /* ------------------------------------------------------------ shortcuts */
+  /* The skip link must not rewrite the hash: the router reads it, so
+   * href="#main" would leave the current page (and render the set list). It
+   * scrolls to the top and lands focus on the main landmark instead. */
+  (function () {
+    var skip = document.querySelector('a.skip');
+    if (!skip) return;
+    skip.addEventListener('click', function (event) {
+      var main = document.getElementById('main');
+      if (!main) return;
+      event.preventDefault();
+      main.focus({ preventScroll: true });
+      window.scrollTo(0, 0);
+    });
+  })();
+
   var shortcutsOpener = null;
 
   function openShortcuts(opener) {
@@ -2241,8 +2346,15 @@
     var dialog = document.getElementById('shortcuts');
     if (!dialog) return;
     dialog.addEventListener('click', function (event) {
-      /* A click on the backdrop reports the dialog itself as the target. */
-      if (event.target === dialog) dialog.close();
+      /* A click on the backdrop reports the dialog itself as the target, but so
+       * does a click in the dialog's own padding; only a point outside the
+       * dialog box is a backdrop click. */
+      if (event.target !== dialog) return;
+      var rect = dialog.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right ||
+          event.clientY < rect.top || event.clientY > rect.bottom) {
+        dialog.close();
+      }
     });
     /* Covers the Close button and Esc alike; focus returns to what opened it. */
     dialog.addEventListener('close', function () {
@@ -2273,9 +2385,50 @@
   });
 
   /* ------------------------------------------------------------ keyboard */
+  function focusChoice(index) {
+    var button = $('#choices .choice[data-i="' + index + '"]');
+    if (button && !button.disabled) button.focus();
+  }
+
+  /* Arrow keys behave like a native radio group: they select as they move.
+   * Crossed-out choices are skipped, because they cannot be chosen. */
+  function moveChoice(from, step) {
+    var count = C.choicesFor(session.questions[session.index]).length;
+    for (var i = 1; i <= count; i++) {
+      var next = ((from + step * i) % count + count) % count;
+      if (session.excluded[next]) continue;
+      selectChoice(next);
+      focusChoice(next);
+      return;
+    }
+  }
+
+  function edgeChoice(fromEnd) {
+    var count = C.choicesFor(session.questions[session.index]).length;
+    for (var i = 0; i < count; i++) {
+      var index = fromEnd ? count - 1 - i : i;
+      if (session.excluded[index]) continue;
+      selectChoice(index);
+      focusChoice(index);
+      return;
+    }
+  }
+
+  function focusQuestionOrMain() {
+    var stem = document.querySelector('#qcard .stem');
+    if (stem) { stem.focus({ preventScroll: true }); return; }
+    var main = document.getElementById('main');
+    if (main) main.focus({ preventScroll: true });
+  }
+
   document.addEventListener('keydown', function (event) {
+    /* Browser and OS shortcuts such as Ctrl+A or Alt+B must never pick a
+     * choice; Shift alone is still a valid way to type a capital letter. */
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (parseHash().path !== '/practice' || !session ||
         session.index >= session.questions.length) return;
+    /* The help dialog is modal: its key events must not answer questions. */
+    if (document.querySelector('dialog[open]')) return;
     var tag = (event.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'a') return;
     var cls = event.target.classList || { contains: function () { return false; } };
@@ -2297,6 +2450,26 @@
       }
       return;
     }
+
+    if (cls.contains('choice') && !session.checked) {
+      var from = parseInt(event.target.getAttribute('data-i'), 10);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        moveChoice(from, 1);
+        return;
+      }
+      if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+        event.preventDefault();
+        moveChoice(from, -1);
+        return;
+      }
+      if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        edgeChoice(event.key === 'End');
+        return;
+      }
+    }
+
     var key = event.key.toUpperCase();
     var index = -1;
     if (key.length === 1 && key >= 'A' && key <= 'Z') index = key.charCodeAt(0) - 65;
@@ -2305,6 +2478,9 @@
     if (index >= 0 && index < C.choicesFor(session.questions[session.index]).length) {
       event.preventDefault();
       selectChoice(index);
+      /* A letter shortcut also puts the keyboard in the group, so the arrow
+       * keys and Tab continue from the chosen option. */
+      if (session.selected === index) focusChoice(index);
     }
   });
 
@@ -2316,6 +2492,7 @@
     await initProgress();
     restoreStoredSession();
     window.addEventListener('hashchange', render);
+    window.addEventListener('resize', syncTableHint);
     render();
   }
 
