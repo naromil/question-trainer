@@ -63,6 +63,20 @@ says which mode is active.
 Use **Settings → Export/Import JSON** to move progress between machines or
 origins.
 
+## Application menu
+
+`./install.sh` adds **Question Trainer** to your application menu:
+
+```bash
+./install.sh
+```
+
+It writes `question-trainer.desktop` to
+`${XDG_DATA_HOME:-$HOME/.local/share}/applications` and refreshes the menu
+cache. The entry starts `qt` and uses `icon.svg` from this checkout by absolute
+path, so re-run the script after moving the repository; `./install.sh --uninstall`
+removes the entry.
+
 ## What it does
 
 | Screen | What you get |
@@ -163,6 +177,8 @@ questions/<set>/        one folder per set: index.json + its unit files
 questions/README.md     complete question-data format reference
 serve.py                stdlib static server + disk progress API
 qt                      one-command launcher for serve.py
+install.sh              installs the desktop entry for the current user
+icon.svg                application icon the desktop entry points at
 tools/test_core.js      node --test suite for core.js and the sample data
 tools/test_server.py    stdlib unittest suite for serve.py
 LICENSE                 MIT licence
