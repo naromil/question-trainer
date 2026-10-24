@@ -676,7 +676,11 @@ test('unitStats and setStats: units are reported inside the set', () => {
   assert.equal(unit.attempted, 1);
   assert.equal(unit.accuracy, 100);
   assert.equal(unit.coverage, 50);
+  assert.equal(unit.points, 40, 'the unit score averages only its own questions');
+  assert.equal(unit.tier.key, 'familiar', 'the unit bar is tiered by its own score');
   assert.equal(unit.due, 0);
+  assert.equal(C.unitStats(state, set, set.units[1], NOW).points, 0,
+    'a unit with only a miss scores zero');
 
   const row = C.setStats(state, set, NOW);
   assert.equal(row.units, 2);
@@ -767,6 +771,10 @@ test('mastery: an archived unit leaves the active set\'s scale', () => {
   assert.equal(C.masteryOf(state, set.id, C.questionsOf(active)), 80,
     'the archived unit\'s record must not inflate the remaining set');
   assert.equal(C.setStats(state, active, NOW + 2).points, 80);
+
+  const archived = C.archivedSets(state)[0];
+  const archivedRow = C.unitStats(state, { id: archived.setId }, archived, NOW + 2);
+  assert.equal(archivedRow.points, 80, 'the archived unit keeps its own score');
 });
 
 test('archiveUnit: the same unit id in another set is untouched', () => {

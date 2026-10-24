@@ -939,15 +939,17 @@
     return href;
   }
 
-  /* One unit inside a set card: its coverage, what is due, and the same three
-   * options a set has. */
+  /* One unit inside a set card: its mastery and coverage, what is due, and the
+   * same three options a set has. */
   function unitRowHTML(row) {
-    var meta = row.attempted + '/' + row.total + ' answered' +
+    var meta = row.points + '% mastery · ' +
+      row.attempted + '/' + row.total + ' answered' +
       (row.attempted ? ' · ' + row.accuracy + '% first try' : '');
     return '<li class="unit-row">' +
       '<div class="unit-head"><b>' + esc(row.title) + '</b>' +
         (row.due ? '<span class="tag due">' + row.due + ' due</span>' : '') + '</div>' +
-      '<div class="bar unit-bar"><i style="width:' + row.coverage + '%"></i></div>' +
+      '<div class="bar unit-bar tier-' + row.tier.key + '" title="' + row.points +
+        '% mastery"><i style="width:' + row.points + '%"></i></div>' +
       '<div class="meta small">' + meta + '</div>' +
       '<div class="row unit-actions">' +
         '<a class="btn btn-sm btn-primary" href="' + practiceHref(row.setId, row.id, null) +
@@ -1223,8 +1225,9 @@
         ? '<div class="set-units"><h4>Units</h4><ul class="unit-list">' +
           row.unitRows.map(function (unitRow) {
             return '<li class="unit-row"><div class="unit-head"><b>' + esc(unitRow.title) +
-              '</b></div><div class="meta small">' + unitRow.attempted + '/' +
-              unitRow.total + ' answered' + (unitRow.due ? ' · ' + unitRow.due + ' due' : '') +
+              '</b></div><div class="meta small">' + unitRow.points + '% mastery · ' +
+              unitRow.attempted + '/' + unitRow.total + ' answered' +
+              (unitRow.due ? ' · ' + unitRow.due + ' due' : '') +
               '</div></li>';
           }).join('') + '</ul></div>'
         : '') +
@@ -1239,8 +1242,10 @@
           '<span class="tag archived">archived unit</span></div>' +
         '<p class="small muted">Unit of ' + esc(entry.setTitle || entry.setId) + ', archived ' +
           esc(fmtDate(entry.archivedAt)) + '.</p>' +
-        '<div class="bar"><i style="width:' + row.coverage + '%"></i></div>' +
-        '<div class="meta">' + row.attempted + '/' + row.total + ' answered' +
+        '<div class="bar tier-' + row.tier.key + '" title="' + row.points +
+          '% mastery"><i style="width:' + row.points + '%"></i></div>' +
+        '<div class="meta">' + row.points + '% mastery · ' +
+          row.attempted + '/' + row.total + ' answered' +
           (row.attempted ? ' · ' + row.accuracy + '% first try' : '') +
           (row.due ? ' · ' + row.due + ' due' : '') + '</div>' +
         '<div class="row set-actions">' +

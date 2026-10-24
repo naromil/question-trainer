@@ -158,10 +158,10 @@ The same question id may be used in two different sets; the two records are
 independent. Set ids must be unique across the bank, unit ids within their set,
 and question ids within their set.
 
-Mastery is a per-set average of every question's own share (the root README
-gives the formula). A unit row reports that unit's own coverage (answered of
-total), first-try accuracy and due count; the units add up to the set's coverage
-and due numbers.
+Mastery is an average of every question's own share (the root README gives the
+formula), computed per set and per unit. A unit row reports that unit's own
+mastery score and coverage (answered of total), first-try accuracy and due
+count; the units add up to the set's coverage and due numbers.
 
 ## Validation and errors
 

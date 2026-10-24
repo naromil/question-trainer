@@ -887,9 +887,10 @@
     return row;
   }
 
-  /* One unit of a set. Mastery stays a per-set average over all of the set's
-   * questions; a unit row reports coverage, first-try accuracy and what is due
-   * among its own questions. */
+  /* One unit of a set. Mastery is the mean share of the unit's own questions,
+   * the same formula as the set score, so a unit row can show a score on the
+   * same scale. Coverage, first-try accuracy and what is due are scoped to the
+   * unit too. */
   function unitStats(state, set, unit, now) {
     now = now || Date.now();
     var row = {
@@ -901,7 +902,8 @@
       attempted: 0,
       correct: 0,
       correctFirstTry: 0,
-      due: 0
+      due: 0,
+      points: masteryOf(state, set.id, unit.questions)
     };
     unit.questions.forEach(function (question) {
       var rec = recordFor(state, set.id, question.id);
@@ -915,6 +917,7 @@
       ? Math.round((row.correctFirstTry / row.attempted) * 100)
       : 0;
     row.coverage = row.total ? Math.round((row.attempted / row.total) * 100) : 0;
+    row.tier = tierOf(row.points, row.attempted);
     row.unseen = row.total - row.attempted;
     return row;
   }
