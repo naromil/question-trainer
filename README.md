@@ -185,5 +185,7 @@ security headers, and progress backup/recovery.
 ## Copyright
 
 Copyright © 2026 naromil. The original code, styles, tooling and documentation in this
-repository are released under the [MIT Licence](LICENSE). Question content you put in
-`questions/` is yours to manage.
+repository are released under the [MIT Licence](LICENSE). The licence does not cover
+question content: question files under `questions/` are git-ignored and are not
+distributed with this repository. If you add question material, you are responsible for
+ensuring you have the right to use and redistribute it.
