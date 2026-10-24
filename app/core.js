@@ -32,23 +32,29 @@
    * mastered when most of *its* questions are known, not after a fixed
    * number of points has been collected.
    *
-   * One question's share starts with its first answer and then moves with
-   * practice:
+   * One question's share is stored as integer permille in [0, 1000] and is
+   * updated answer by answer:
    *
-   *   - a right answer on the first try is the strongest evidence, a first
-   *     miss starts lower and needs more right answers to catch up;
-   *   - every further right answer adds a little, so a question practised
-   *     several times is worth more than one seen once;
-   *   - a later miss costs more than a right answer adds, so a rusty
-   *     question loses ground again.
+   *   - a right answer on the first try sets it to 800; a first miss to 0;
+   *   - a right answer on a question that has never been right before sets it
+   *     to 550, however many misses came first;
+   *   - every other right answer adds 100 and every miss subtracts 200;
+   *   - the share is clamped to [0, 1000] after every step, so headroom above
+   *     a full score and debt below zero are not remembered.
    *
-   * Shares are fractions in [0, 1]; masteryOf() averages and scales them.
+   * The last point is deliberate: a saturated question loses 20 points on its
+   * next miss, and a question missed several times starts climbing again from
+   * 55% on its first correct answer. The legacy count formula is kept only to
+   * seed `s` for records imported without one.
+   *
+   * masteryOf() averages the stored shares and scales the mean to 0..100.
    * ------------------------------------------------------------------ */
   var MASTERY = {
-    firstTry: 0.8,
-    retry: 0.55,
-    practiceGain: 0.1,
-    missPenalty: 0.2,
+    firstTry: 800,
+    retry: 550,
+    practiceGain: 100,
+    missPenalty: 200,
+    shareMax: 1000,
     cap: 100,
     tiers: [
       { min: 85, key: 'mastered', label: 'Mastered' },
@@ -534,14 +540,21 @@
         var attempts = Math.max(0, rec.a | 0);
         if (!attempts) return;
         var correct = clamp(rec.c | 0, 0, attempts);
+        /* Exports predating `f` lose the first answer as soon as a question
+         * has both a right and a wrong attempt. What survives: an all-correct
+         * record (c === a) was right from the start, and a mixed or all-wrong
+         * one cannot be assumed correct, so it counts as not-first-try. */
+        var first = rec.f === 0 || rec.f === 1 ? rec.f : (correct === attempts ? 1 : 0);
         state.q[key] = {
           a: attempts,
           c: correct,
-          /* Exports predating `f` lose the first answer as soon as a question
-           * has both a right and a wrong attempt. What survives: an all-correct
-           * record (c === a) was right from the start, and a mixed or all-wrong
-           * one cannot be assumed correct, so it counts as not-first-try. */
-          f: rec.f === 0 || rec.f === 1 ? rec.f : (correct === attempts ? 1 : 0),
+          f: first,
+          /* Records from before the stored score have no `s`; seed it once
+           * from the legacy count formula so the displayed score does not
+           * jump on the upgrade. */
+          s: typeof rec.s === 'number' && isFinite(rec.s)
+            ? clampShare(Math.round(rec.s))
+            : deriveShare({ a: attempts, c: correct, f: first }),
           box: clamp(rec.box | 0, 0, SRS_LAST_BOX),
           due: typeof rec.due === 'number' ? rec.due : now,
           last: typeof rec.last === 'number' ? rec.last : now
@@ -662,6 +675,7 @@
        * rather than derived: later retries inflate `c`, so "ever correct" is a
        * different (wrong) thing from "right on the first try". */
       f: before ? (before.f ? 1 : 0) : (correct ? 1 : 0),
+      s: nextShare(before, correct),
       box: boxAfter,
       due: now + SRS_INTERVALS_DAYS[boxAfter] * DAY_MS,
       last: now
@@ -703,17 +717,41 @@
     return MASTERY.tiers[MASTERY.tiers.length - 1];
   }
 
-  /* The question's share of the set's mastery, in [0, 1]. */
-  function questionMastery(rec) {
+  function clampShare(share) {
+    return Math.min(MASTERY.shareMax, Math.max(0, share));
+  }
+
+  /* The pre-permille count formula, in permille. Only used to seed `s` for
+   * imported records that predate the stored score. */
+  function deriveShare(rec) {
     if (!rec || !rec.a || !rec.c) return 0;
-    var correct = rec.c;
-    var wrong = rec.a - correct;
+    var wrong = rec.a - rec.c;
     var base = rec.f ? MASTERY.firstTry : MASTERY.retry;
-    var gained = (correct - 1) * MASTERY.practiceGain;
-    /* The first miss is already reflected in the lower base; every later miss
-     * costs again. A question right on the first try starts with no free miss. */
     var misses = rec.f ? wrong : Math.max(0, wrong - 1);
-    return clamp(base + gained - misses * MASTERY.missPenalty, 0, 1);
+    return clampShare(base + (rec.c - 1) * MASTERY.practiceGain -
+      misses * MASTERY.missPenalty);
+  }
+
+  /* The score after one answer. The first answer is the baseline; a correct
+   * answer on a question that has never been correct is the one-time 550
+   * bootstrap, however many misses came before it. Everything else is 100 up
+   * or 200 down, clamped after the step. */
+  function nextShare(before, correct) {
+    if (!before) return correct ? MASTERY.firstTry : 0;
+    var share = typeof before.s === 'number' && isFinite(before.s)
+      ? clampShare(Math.round(before.s))
+      : deriveShare(before);
+    if (correct) share = before.c > 0 ? share + MASTERY.practiceGain : MASTERY.retry;
+    else share -= MASTERY.missPenalty;
+    return clampShare(share);
+  }
+
+  /* The question's stored share in permille. */
+  function questionShare(rec) {
+    if (!rec || !rec.a) return 0;
+    return typeof rec.s === 'number' && isFinite(rec.s)
+      ? clampShare(Math.round(rec.s))
+      : deriveShare(rec);
   }
 
   /* The set's 0-100 score: the mean of every question's share. Unseen
@@ -724,9 +762,11 @@
     if (!list.length) return 0;
     var sum = 0;
     for (var i = 0; i < list.length; i++) {
-      sum += questionMastery(recordFor(state, setId, list[i].id));
+      sum += questionShare(recordFor(state, setId, list[i].id));
     }
-    return clamp(Math.round((sum / list.length) * 100), 0, MASTERY.cap);
+    /* sum is permille; the mean share is sum / (1000 * n), and the 0-100
+     * score is that times 100. */
+    return clamp(Math.round(sum / (10 * list.length)), 0, MASTERY.cap);
   }
 
   /* ------------------------------------------------------------------ *

@@ -81,12 +81,19 @@ A 0–100 score per set. Every question in the set contributes an equal share,
 and those shares are averaged, so a set of five and a set of fifty are measured
 on the same scale; unanswered questions count as zero.
 
-Each question's share starts with its first answer and then moves with practice:
+Each question's share is stored per question and updated answer by answer:
 
-* right on the first try: **80%**; first answer missed: **55%** and it needs more
-  correct answers to catch up;
-* each further correct answer adds **10%** to that question's share;
-* a later miss takes **20%** off it.
+* right on the first try: **80%**; a first answer missed: **0%**, and the first
+  correct answer after it sets **55%** — however many misses came before, that
+  first correct is always worth 55%;
+* any other correct answer adds **10%** to that question's share;
+* any miss takes **20%** off it, including a miss on a question already at
+  **100%** (six correct answers then one miss gives **80%**).
+
+The share is clamped to 0–100 after every answer, so practice beyond 100% and
+misses below 0% are not remembered. That means a saturated question reacts to
+its next miss, while a question that has been missed repeatedly starts climbing
+again from 55% on its first correct answer.
 
 So the set score rewards coverage, first-try correctness and repeated practice,
 and it cannot be pushed to 100 by grinding one question: a perfect first run

@@ -511,6 +511,58 @@ test('mastery: repeated practice lifts a question, a first miss starts it lower'
   assert.equal(C.masteryOf(missedFirst, set.id, set.questions), 65);
 });
 
+test('mastery: the first correct answer after a first miss sets 55%', () => {
+  const [set] = load(rawSet());
+  const state = C.emptyState(NOW);
+  const q = set.questions[0];
+
+  C.applyAnswer(state, set.id, q, 0, NOW);
+  assert.equal(state.q[C.questionKey(set.id, 'q1')].s, 0);
+  C.applyAnswer(state, set.id, q, 1, NOW + DAY);
+  assert.equal(state.q[C.questionKey(set.id, 'q1')].s, 550);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 55);
+});
+
+test('mastery: three correct answers reach 100 and the next miss costs 20', () => {
+  const [set] = load(rawSet());
+  const state = C.emptyState(NOW);
+  const q = set.questions[0];
+
+  for (let i = 0; i < 3; i += 1) {
+    C.applyAnswer(state, set.id, q, 1, NOW + i * DAY);
+  }
+  assert.equal(C.masteryOf(state, set.id, set.questions), 100);
+  C.applyAnswer(state, set.id, q, 0, NOW + 3 * DAY);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 80);
+});
+
+test('mastery: misses before the first correct are forgiven', () => {
+  const [set] = load(rawSet());
+  const state = C.emptyState(NOW);
+  const q = set.questions[0];
+
+  for (let i = 0; i < 3; i += 1) {
+    C.applyAnswer(state, set.id, q, 0, NOW + i * DAY);
+  }
+  assert.equal(C.masteryOf(state, set.id, set.questions), 0);
+  C.applyAnswer(state, set.id, q, 1, NOW + 3 * DAY);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 55,
+    'the first correct answer is 55 however many misses came first');
+});
+
+test('mastery: a miss on a saturated question costs 20, not nothing', () => {
+  const [set] = load(rawSet());
+  const state = C.emptyState(NOW);
+  const q = set.questions[0];
+
+  for (let i = 0; i < 6; i += 1) {
+    C.applyAnswer(state, set.id, q, 1, NOW + i * DAY);
+  }
+  assert.equal(C.masteryOf(state, set.id, set.questions), 100);
+  C.applyAnswer(state, set.id, q, 0, NOW + 6 * DAY);
+  assert.equal(C.masteryOf(state, set.id, set.questions), 80);
+});
+
 test('tierOf: tiers follow the point thresholds', () => {
   assert.equal(C.tierOf(0, 0).key, 'new');
   assert.equal(C.tierOf(0, 1).key, 'new');
@@ -869,6 +921,8 @@ test('sanitizeState: an old export migrates from stored points to the derived sc
   }, NOW);
 
   assert.equal(state.q[key].fast, undefined, 'timing is not carried into the score');
+  assert.equal(state.q[key].s, 800,
+    'the stored share is seeded from the legacy first-try record');
   assert.equal(state.sets[set.id].points, undefined);
   assert.equal(C.masteryOf(state, set.id, set.questions), 80,
     'the score is recomputed from the first-try record, not the old total');
