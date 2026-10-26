@@ -129,7 +129,12 @@ takes it higher.
 ### Spaced review
 
 Leitner boxes. A correct answer promotes a question one box; a miss sends it back to box 0
-and makes it due immediately. Gaps between reviews: **1, 3, 7, 21** days.
+and makes it due immediately. Gaps between reviews: **1, 4, 14, 45, 120** days.
+
+The trainer is for reviewing knowledge learned elsewhere, so a question that has never been
+missed counts as already known: a correct answer on it jumps straight to the **14**-day gap
+(or one box further, if it is already there). Only corrections — questions missed at least
+once — climb the ladder from 1 day.
 
 * **Practice** walks the set lowest-mastery-first: stored mastery share, then Leitner
   box, then least-recently-answered, then fewest attempts; unseen questions come

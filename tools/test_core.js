@@ -384,8 +384,8 @@ test('applyAnswer: first-try correct starts a question at 80% and schedules revi
   assert.equal(rec.a, 1);
   assert.equal(rec.c, 1);
   assert.equal(rec.f, 1);
-  assert.equal(rec.box, 1);
-  assert.equal(rec.due, NOW + DAY);
+  assert.equal(rec.box, C.SRS_KNOWN_BOX, 'a first-try right answer is already known');
+  assert.equal(rec.due, NOW + 14 * DAY);
 });
 
 test('applyAnswer: repeated correct answers raise the question\'s share', () => {
@@ -399,7 +399,7 @@ test('applyAnswer: repeated correct answers raise the question\'s share', () => 
   assert.equal(result.coin, 'repeat');
   assert.equal(C.masteryOf(state, set.id, set.questions), 90);
   const rec = state.q[C.questionKey(set.id, 'q1')];
-  assert.equal(rec.box, 2);
+  assert.equal(rec.box, C.SRS_KNOWN_BOX + 1);
   assert.equal(rec.f, 1);
 });
 
@@ -443,15 +443,40 @@ test('applyAnswer: the "I don\'t know" choice is always a miss', () => {
   assert.equal(rec.f, 1, 'the first answer stays the one that decides first-try accuracy');
 });
 
-test('SRS: correct answers walk box 1 -> 2 -> 3 -> 4 and then hold', () => {
+test('SRS: a correction walks box 1 -> 2 -> ... -> last and then holds', () => {
   const [set] = load(rawSet());
   const state = C.emptyState(NOW);
   const q1 = set.questions[0];
-  for (let i = 0; i < 6; i += 1) {
-    C.applyAnswer(state, set.id, q1, 1, NOW + i * 30 * DAY);
+  C.applyAnswer(state, set.id, q1, 0, NOW); // missed: a correction
+  for (let i = 0; i < 7; i += 1) {
+    C.applyAnswer(state, set.id, q1, 1, NOW + (i + 1) * 200 * DAY);
     const rec = state.q[C.questionKey(set.id, 'q1')];
     assert.equal(rec.box, Math.min(i + 1, C.SRS_LAST_BOX));
   }
+});
+
+test('SRS: a never-missed question jumps to the known box, then climbs', () => {
+  const [set] = load(rawSet());
+  const state = C.emptyState(NOW);
+  const key = C.questionKey(set.id, 'q1');
+  withRecord(state, set.id, 'q1', { a: 1, c: 1, f: 1, s: 800, box: 1 });
+  C.applyAnswer(state, set.id, set.questions[0], 1, NOW);
+  assert.equal(state.q[key].box, C.SRS_KNOWN_BOX, 'an old low box is lifted');
+  assert.equal(state.q[key].due, NOW + 14 * DAY);
+  C.applyAnswer(state, set.id, set.questions[0], 1, NOW + 14 * DAY);
+  assert.equal(state.q[key].box, C.SRS_KNOWN_BOX + 1);
+  assert.equal(state.q[key].due, NOW + 59 * DAY);
+});
+
+test('SRS: once missed, a question no longer gets the known-box jump', () => {
+  const [set] = load(rawSet());
+  const state = C.emptyState(NOW);
+  const q1 = set.questions[0];
+  C.applyAnswer(state, set.id, q1, 1, NOW);
+  C.applyAnswer(state, set.id, q1, 0, NOW + DAY);
+  const result = C.applyAnswer(state, set.id, q1, 1, NOW + DAY);
+  assert.equal(result.boxAfter, 1);
+  assert.equal(state.q[C.questionKey(set.id, 'q1')].due, NOW + 2 * DAY);
 });
 
 test('mastery is capped at 100 and floored at 0', () => {
@@ -603,14 +628,14 @@ test('selectSession: review serves exactly the due questions, oldest first', () 
     questions: [question({ id: 'q1' }), question({ id: 'q2' })]
   }));
   const state = C.emptyState(NOW);
-  C.applyAnswer(state, set.id, set.questions[0], 1, NOW); // due NOW + 1 day
+  C.applyAnswer(state, set.id, set.questions[0], 1, NOW); // due NOW + 14 days
   C.applyAnswer(state, set.id, set.questions[1], 0, NOW); // due NOW
 
   const atNow = C.selectSession(state, set.id, set.questions, { mode: 'review', length: 10, now: NOW });
   assert.deepEqual(atNow.map((item) => item.id), ['q2']);
 
   const later = C.selectSession(state, set.id, set.questions, {
-    mode: 'review', length: 10, now: NOW + 2 * DAY
+    mode: 'review', length: 10, now: NOW + 14 * DAY
   });
   assert.deepEqual(later.map((item) => item.id), ['q2', 'q1']);
 });
@@ -1086,10 +1111,10 @@ test('dueCount counts what the review mode would serve', () => {
     questions: [question({ id: 'q1' }), question({ id: 'q2' })]
   }));
   const state = C.emptyState(NOW);
-  C.applyAnswer(state, set.id, set.questions[0], 1, NOW); // due in 1 day
+  C.applyAnswer(state, set.id, set.questions[0], 1, NOW); // due in 14 days
   C.applyAnswer(state, set.id, set.questions[1], 0, NOW); // due now
   assert.equal(C.dueCount(state, [set], NOW), 1);
-  assert.equal(C.dueCount(state, [set], NOW + 2 * DAY), 2);
+  assert.equal(C.dueCount(state, [set], NOW + 14 * DAY), 2);
 });
 
 test('activeDueCount: archived sets keep their schedules but leave the counter', () => {

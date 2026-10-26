@@ -67,9 +67,16 @@
   /* Spaced repetition: Leitner boxes. `box` is the index into this table and
    * the value is the gap until the question is due again. Box 0 means "new, or
    * lapsed and due right now"; each correct answer promotes the question one
-   * box, so the gaps become 1, 3, 7, 21 days. A miss sends it back to box 0. */
-  var SRS_INTERVALS_DAYS = [0, 1, 3, 7, 21];
+   * box, so the gaps become 1, 4, 14, 45, 120 days. A miss sends it back to
+   * box 0.
+   *
+   * The trainer reviews knowledge learned elsewhere, so a question that has
+   * never been missed is already known: a correct answer on it promotes it to
+   * at least SRS_KNOWN_BOX (14 days). Only corrections - questions missed at
+   * least once - climb the ladder from box 1. */
+  var SRS_INTERVALS_DAYS = [0, 1, 4, 14, 45, 120];
   var SRS_LAST_BOX = SRS_INTERVALS_DAYS.length - 1;
+  var SRS_KNOWN_BOX = 3;
 
   function clamp(n, lo, hi) {
     return n < lo ? lo : n > hi ? hi : n;
@@ -830,7 +837,10 @@
     var hadCorrectBefore = !!(before && before.c > 0);
 
     var boxBefore = before ? before.box : 0;
-    var boxAfter = correct ? clamp(boxBefore + 1, 1, SRS_LAST_BOX) : 0;
+    var neverMissed = !before || before.c >= before.a;
+    var boxAfter = correct
+      ? clamp(Math.max(boxBefore + 1, neverMissed ? SRS_KNOWN_BOX : 1), 1, SRS_LAST_BOX)
+      : 0;
     var rec = {
       a: (before ? before.a : 0) + 1,
       c: (before ? before.c : 0) + (correct ? 1 : 0),
@@ -1721,6 +1731,7 @@
     MASTERY: MASTERY,
     SRS_INTERVALS_DAYS: SRS_INTERVALS_DAYS,
     SRS_LAST_BOX: SRS_LAST_BOX,
+    SRS_KNOWN_BOX: SRS_KNOWN_BOX,
     STATE_VERSION: STATE_VERSION,
     STATE_APP: STATE_APP,
     SESSION_LENGTHS: SESSION_LENGTHS,
