@@ -863,6 +863,57 @@ select:focus-visible, input:focus-visible, textarea:focus-visible {
 textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radius: 8px;
   border: 1px solid var(--line-2); background: var(--card); color: var(--ink); padding: .5rem; }
 
+/* ------------------------------------------------------------ browse */
+.browse-view .prac-head .head-title { margin: 0; }
+.browse-view .set-sort input[type="checkbox"] { margin: 0 .3rem 0 0; vertical-align: -1px; }
+.browse-grid {
+  display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 1rem; align-items: start;
+}
+.browse-grid > .card + .card { margin-top: 0; }
+.browse-nav {
+  padding: .7rem .5rem; position: sticky; top: 4.5rem;
+  max-height: calc(100vh - 6rem); overflow-y: auto;
+}
+.browse-nav > p { margin: 0 .5rem .4rem; }
+.browse-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.browse-item {
+  display: flex; align-items: center; gap: .5rem; width: 100%; text-align: left;
+  font: inherit; font-size: .84rem; color: var(--ink); background: none;
+  border: 1px solid transparent; border-radius: var(--radius-sm); padding: .35rem .5rem; cursor: pointer;
+}
+.browse-item:hover { background: var(--card-2); }
+.browse-item[aria-current="true"] { background: var(--blue-soft); border-color: var(--blue); }
+.browse-item.is-deleted .browse-stem { color: var(--ink-3); text-decoration: line-through; }
+.browse-num {
+  flex: none; min-width: 1.8em; font-variant-numeric: tabular-nums;
+  color: var(--ink-3); font-size: .76rem; text-align: right;
+}
+.browse-stem { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browse-item .tag { flex: none; }
+.browse-viewer:focus { outline: none; }
+.browse-head { align-items: center; flex-wrap: wrap; }
+.browse-step { gap: .4rem; flex-wrap: nowrap; }
+.browse-step .small { font-variant-numeric: tabular-nums; }
+.browse-record { margin: .5rem 0 0; }
+.browse-question .stem { margin-top: .9rem; }
+.browse-actions { margin-top: .7rem; padding-bottom: .8rem; border-bottom: 1px solid var(--line); }
+.deleted-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .7rem; }
+.deleted-row {
+  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+  padding-bottom: .7rem; border-bottom: 1px solid var(--line);
+}
+.deleted-row:last-child { border-bottom: none; padding-bottom: 0; }
+.deleted-text { min-width: 0; }
+.deleted-stem { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 760px) {
+  /* The list moves above the question and keeps a short scroll of its own. */
+  .browse-grid { grid-template-columns: minmax(0, 1fr); }
+  .browse-nav { position: static; max-height: 14rem; }
+  .deleted-row { flex-direction: column; align-items: stretch; }
+}
+
 @media (max-width: 860px) {
   /* Stack the units panel under the set instead of squeezing both columns. */
   .set-card[data-multi] { grid-template-columns: minmax(0, 1fr); }

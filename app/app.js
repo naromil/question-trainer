@@ -52,6 +52,12 @@
   /* Home list controls survive re-renders of the page but not a reload. */
   var homeQuery = '';
   var homeSort = 'index';
+  /* Question browser filters; like the home controls, they last until a
+   * reload. The set, unit and selected question live in the hash. */
+  var browseQuery = '';
+  var browseShowDeleted = true;
+  /* The browser that is on screen, for the keyboard handler. */
+  var browseView = null;
   /* The trouble rows last painted on Progress; the per-set practice buttons
    * reuse them instead of re-walking the bank. */
   var lastTroubleRows = [];
@@ -763,8 +769,9 @@
   }
 
   function setActiveNav(path) {
-    /* Practice belongs to the set list, not to its own nav entry. */
-    var active = path === '/practice' ? '/' : path;
+    /* Practice and the browser belong to the set list, not to their own
+     * nav entries. */
+    var active = path === '/practice' || path === '/browse' ? '/' : path;
     $$('#nav a').forEach(function (link) {
       if (link.getAttribute('data-route') === active) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
@@ -873,6 +880,7 @@
     else if (route.path === '/settings') renderSettings(route);
     else if (route.path === '/format') renderFormat();
     else if (route.path === '/practice') renderPractice(route.params);
+    else if (route.path === '/browse') renderBrowse(route.params);
     else renderHome();
     if (routeChanged) {
       appEl.classList.remove('view-in');
@@ -887,6 +895,13 @@
     var href = '#/practice?set=' + encodeURIComponent(setId);
     if (unitId) href += '&unit=' + encodeURIComponent(unitId);
     if (mode) href += '&mode=' + mode;
+    return href;
+  }
+
+  function browseHref(setId, unitId, questionId) {
+    var href = '#/browse?set=' + encodeURIComponent(setId);
+    if (unitId) href += '&unit=' + encodeURIComponent(unitId);
+    if (questionId) href += '&q=' + encodeURIComponent(questionId);
     return href;
   }
 
@@ -905,6 +920,8 @@
           '">Practice</a>' +
         '<a class="btn btn-sm" href="' + practiceHref(row.setId, row.id, 'review') +
           '">Review</a>' +
+        '<a class="btn btn-sm" href="' + browseHref(row.setId, row.id, null) +
+          '">Browse</a>' +
         '<button type="button" class="btn btn-ghost btn-sm" data-archive-unit="' +
           esc(row.id) + '" data-set="' + esc(row.setId) + '">Archive</button>' +
       '</div></li>';
@@ -932,6 +949,8 @@
             '">Practice</a>' +
           '<a class="btn btn-sm" href="' + practiceHref(row.id, null, 'review') +
             '">Review</a>' +
+          '<a class="btn btn-sm" href="' + browseHref(row.id, null, null) +
+            '">Browse</a>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-archive="' + esc(row.id) +
             '">Archive</button>' +
         '</div>' +
@@ -1140,7 +1159,7 @@
   }
 
   function archivedSetCard(entry, now) {
-    var row = C.setStats(state, entry, now);
+    var row = C.setStats(state, C.withoutDeleted(state, entry) || entry, now);
     var inSource = !!sourceSet(entry.id);
     return '<article class="card set-card" data-units="' + row.units + '"' +
       (row.units > 1 ? ' data-multi="1"' : '') + '>' +
@@ -1165,6 +1184,8 @@
             '">Practice</a>' +
           '<a class="btn btn-sm" href="' + practiceHref(row.id, null, 'review') +
             '">Review</a>' +
+          '<a class="btn btn-sm" href="' + browseHref(row.id, null, null) +
+            '">Browse</a>' +
           '<button type="button" class="btn btn-sm" data-restore="' + esc(row.id) +
             '">Restore</button>' +
         '</div>' +
@@ -1182,7 +1203,8 @@
   }
 
   function archivedUnitCard(entry, now) {
-    var row = C.unitStats(state, { id: entry.setId }, entry, now);
+    var kept = C.withoutDeleted(state, { id: entry.setId, title: '', units: [entry] });
+    var row = C.unitStats(state, { id: entry.setId }, kept ? C.unitsOf(kept)[0] : entry, now);
     return '<article class="card set-card" data-units="0">' +
       '<div class="set-main">' +
         '<div class="spread"><h3>' + esc(entry.title) + '</h3>' +
@@ -1220,9 +1242,338 @@
           : archivedSetCard(entry, now);
       }).join('') + '</div>';
     }
+    html += deletedSectionHTML();
 
     appEl.innerHTML = html;
     bindRestoreButtons();
+    $$('[data-restore-question]', appEl).forEach(function (button) {
+      button.addEventListener('click', function () {
+        C.restoreQuestion(state, button.getAttribute('data-set'),
+          button.getAttribute('data-restore-question'), Date.now());
+        saveState();
+        render();
+      });
+    });
+  }
+
+  /* Deleted questions of active sets, archived sets and archived units alike,
+   * each with a way back. */
+  function deletedSectionHTML() {
+    var sets = C.browseSets(state, SOURCE_SETS);
+    C.archivedSets(state).forEach(function (entry) {
+      sets.push(entry.kind === 'unit'
+        ? { id: entry.setId, title: entry.setTitle || entry.setId, units: [entry] }
+        : entry);
+    });
+    var rows = C.deletedQuestions(state, sets);
+    if (!rows.length) return '';
+    return '<section class="card deleted-section"><h2>Deleted questions</h2>' +
+      '<p class="muted small">Deleted questions are left out of practice, review, mastery ' +
+      'and stats. Their files and progress are kept, so a restore brings them back as ' +
+      'they were.</p><ul class="deleted-list">' +
+      rows.map(function (row) {
+        return '<li class="deleted-row"><div class="deleted-text">' +
+            '<div class="small muted">' + esc(row.set.title) +
+              (C.unitsOf(row.set).length > 1 ? ' · ' + esc(row.unit.title) : '') +
+              (row.at ? ' · deleted ' + esc(fmtDate(row.at)) : '') + '</div>' +
+            '<div class="deleted-stem">' + esc(row.q.question) + '</div>' +
+          '</div><div class="row unit-actions">' +
+            '<a class="btn btn-sm" href="' + browseHref(row.set.id, null, row.q.id) +
+              '">View</a>' +
+            '<button type="button" class="btn btn-sm btn-primary" data-restore-question="' +
+              esc(row.q.id) + '" data-set="' + esc(row.set.id) + '">Restore</button>' +
+          '</div></li>';
+      }).join('') + '</ul></section>';
+  }
+
+  /* ------------------------------------------------------------ browse */
+  /* Every question of the set in unit order, numbered across the whole set so
+   * a number stays put while the list is filtered. */
+  function browseEntries(set) {
+    var out = [];
+    C.unitsOf(set).forEach(function (unit) {
+      unit.questions.forEach(function (question) {
+        out.push({
+          n: out.length + 1,
+          unit: unit,
+          q: question,
+          deleted: C.isDeleted(state, set.id, question.id)
+        });
+      });
+    });
+    return out;
+  }
+
+  function browseFilter(entries, unitId) {
+    var needle = browseQuery.trim().toLowerCase();
+    return entries.filter(function (entry) {
+      if (unitId && entry.unit.id !== unitId) return false;
+      if (entry.deleted && !browseShowDeleted) return false;
+      if (!needle) return true;
+      var hay = [entry.q.id, entry.q.question, entry.q.passage]
+        .concat(entry.q.choices).join('\n').toLowerCase();
+      return hay.indexOf(needle) >= 0;
+    });
+  }
+
+  function questionRecord(setId, questionId) {
+    return state.q[C.questionKey(setId, questionId)] || null;
+  }
+
+  function recordText(rec, now) {
+    if (!rec) return 'Not answered yet';
+    return Math.round(rec.s / 10) + '% mastery share · ' + rec.c + '/' + rec.a +
+      ' correct · ' + (rec.f ? 'right' : 'missed') + ' on the first try · ' +
+      (rec.due <= now ? 'due now' : 'due ' + fmtDate(rec.due));
+  }
+
+  /* Point the hash at the shown question without a hashchange: moving through
+   * the list repaints the panes in place, so scroll and focus stay put. */
+  function syncBrowseHash(setId, unitId, questionId) {
+    var hash = browseHref(setId, unitId, questionId);
+    if (location.hash !== hash) history.replaceState(null, '', hash);
+    lastRenderedHash = location.hash;
+  }
+
+  /* The live question set drops a question deleted under it; the answers it
+   * already graded are saved, only the cursor is lost. */
+  function dropSessionWith(setId, questionId) {
+    if (!session || session.cfg.setId !== setId ||
+        session.index >= session.questions.length) return;
+    var hit = session.questions.some(function (question) { return question.id === questionId; });
+    if (!hit) return;
+    session = null;
+    clearStoredSession();
+  }
+
+  function renderBrowse(params) {
+    var setId = params.get('set') || '';
+    var set = C.findBrowseSet(state, SOURCE_SETS, setId);
+    if (!set) { renderMissingSet(setId); return; }
+    var units = C.unitsOf(set);
+    var unitId = params.get('unit') || '';
+    if (unitId && !C.unitOf(set, unitId)) unitId = '';
+    var current = params.get('q') || '';
+    var all = browseEntries(set);
+    var deletedCount = all.filter(function (entry) { return entry.deleted; }).length;
+    var archived = !!state.archived[set.id];
+
+    appEl.innerHTML =
+      '<div class="browse-view">' +
+        '<div class="prac-head">' +
+          '<a class="btn btn-ghost btn-sm" href="' + (archived ? '#/archive">← Archive' : '#/">← Sets') +
+            '</a>' +
+          '<h1 class="head-title">' + esc(set.title) +
+            ' <span class="muted small head-mode">· Browse</span></h1>' +
+          '<span class="muted small">' + plural(all.length, 'question') +
+            (deletedCount ? ' · ' + deletedCount + ' deleted' : '') + '</span>' +
+        '</div>' +
+        '<div class="set-tools">' +
+          (units.length > 1
+            ? '<label class="set-sort">Unit <select id="browse-unit">' +
+              '<option value="">All units</option>' +
+              units.map(function (unit) {
+                return '<option value="' + esc(unit.id) + '"' +
+                  (unit.id === unitId ? ' selected' : '') + '>' + esc(unit.title) + '</option>';
+              }).join('') + '</select></label>'
+            : '') +
+          '<label class="set-search"><span class="sr-only">Filter questions</span>' +
+            '<input type="search" id="browse-filter" placeholder="Filter questions" value="' +
+              esc(browseQuery) + '" autocomplete="off" spellcheck="false"></label>' +
+          '<label class="set-sort"><input type="checkbox" id="browse-deleted"' +
+            (browseShowDeleted ? ' checked' : '') + '> Show deleted</label>' +
+        '</div>' +
+        '<div class="browse-grid">' +
+          '<nav class="card browse-nav" aria-label="Questions">' +
+            '<p class="small muted" id="browse-count" aria-live="polite"></p>' +
+            '<ol class="browse-list" id="browse-list"></ol>' +
+          '</nav>' +
+          '<section class="card browse-viewer" id="browse-viewer" tabindex="-1" ' +
+            'aria-label="Question"></section>' +
+        '</div>' +
+      '</div>';
+
+    var view = { set: set, unitId: unitId, current: current };
+    paintBrowse(view);
+
+    var unitSelect = $('#browse-unit');
+    if (unitSelect) unitSelect.addEventListener('change', function (event) {
+      view.unitId = event.target.value;
+      paintBrowse(view);
+    });
+    $('#browse-filter').addEventListener('input', function (event) {
+      browseQuery = event.target.value;
+      paintBrowse(view);
+    });
+    $('#browse-deleted').addEventListener('change', function (event) {
+      browseShowDeleted = event.target.checked;
+      paintBrowse(view);
+    });
+    $('#browse-list').addEventListener('click', function (event) {
+      var button = event.target.closest('[data-qid]');
+      if (!button) return;
+      view.current = button.getAttribute('data-qid');
+      paintBrowse(view);
+    });
+    $('#browse-viewer').addEventListener('click', function (event) {
+      var button = event.target.closest('button');
+      if (!button) return;
+      if (button.id === 'browse-prev') stepBrowse(view, -1);
+      else if (button.id === 'browse-next') stepBrowse(view, 1);
+      else if (button.hasAttribute('data-browse-delete')) toggleDeleted(view, true);
+      else if (button.hasAttribute('data-browse-restore')) toggleDeleted(view, false);
+      else if (button.hasAttribute('data-browse-reset')) resetQuestion(view);
+    });
+    browseView = view;
+  }
+
+
+  function stepBrowse(view, step) {
+    var list = browseFilter(browseEntries(view.set), view.unitId);
+    var at = -1;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].q.id === view.current) { at = i; break; }
+    }
+    var next = list[at + step];
+    if (!next) return;
+    view.current = next.q.id;
+    paintBrowse(view);
+  }
+
+  function toggleDeleted(view, on) {
+    var setId = view.set.id;
+    var questionId = view.current;
+    if (on) {
+      /* With deleted questions hidden, the cursor moves on to a neighbour
+       * rather than onto an empty pane. */
+      if (!browseShowDeleted) {
+        var list = browseFilter(browseEntries(view.set), view.unitId);
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].q.id !== questionId) continue;
+          var neighbour = list[i + 1] || list[i - 1];
+          if (neighbour) view.current = neighbour.q.id;
+          break;
+        }
+      }
+      C.deleteQuestion(state, setId, questionId, Date.now());
+      dropSessionWith(setId, questionId);
+    } else {
+      C.restoreQuestion(state, setId, questionId, Date.now());
+    }
+    if (!saveState()) {
+      window.alert('The change could not be saved because browser storage is full.');
+    }
+    syncBrowseHash(setId, view.unitId, view.current);
+    render();
+    var again = $('#browse-viewer [data-browse-restore], #browse-viewer [data-browse-delete]');
+    if (again) again.focus({ preventScroll: true });
+  }
+
+  function resetQuestion(view) {
+    if (!window.confirm('Reset progress for this question? Its history, mastery share ' +
+        'and review date are forgotten.')) return;
+    C.resetQuestionProgress(state, view.set.id, view.current, Date.now());
+    if (!saveState()) {
+      window.alert('The reset could not be saved because browser storage is full.');
+    }
+    paintBrowse(view);
+  }
+
+  /* Repaint the list and the viewer from the view and the filters. Focus on a
+   * repainted control is carried over to its replacement. */
+  function paintBrowse(view) {
+    var listEl = document.getElementById('browse-list');
+    var viewer = document.getElementById('browse-viewer');
+    if (!listEl || !viewer) return;
+    var active = document.activeElement;
+    var focusId = active && active.id && viewer.contains(active) ? active.id : '';
+    var focusList = !!active && listEl.contains(active);
+
+    var all = browseEntries(view.set);
+    var list = browseFilter(all, view.unitId);
+    var entry = null;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].q.id === view.current) { entry = list[i]; break; }
+    }
+    if (!entry && list.length) entry = list[0];
+    var at = entry ? list.indexOf(entry) : -1;
+    view.current = entry ? entry.q.id : '';
+    syncBrowseHash(view.set.id, view.unitId, view.current);
+
+    var count = document.getElementById('browse-count');
+    if (count) {
+      var scope = view.unitId ? C.questionsOf(view.set, view.unitId).length : all.length;
+      count.textContent = list.length === scope
+        ? plural(list.length, 'question')
+        : list.length + ' of ' + plural(scope, 'question');
+    }
+    listEl.innerHTML = list.map(function (item) {
+      var rec = questionRecord(view.set.id, item.q.id);
+      var badge = item.deleted
+        ? '<span class="tag archived">deleted</span>'
+        : rec ? '<span class="tag ' + shareTier(rec.s) + '">' + Math.round(rec.s / 10) +
+          '%</span>' : '<span class="tag new">new</span>';
+      return '<li><button type="button" class="browse-item' +
+        (item.deleted ? ' is-deleted' : '') + '" data-qid="' + esc(item.q.id) + '"' +
+        (item === entry ? ' aria-current="true"' : '') + '>' +
+        '<span class="browse-num">' + item.n + '</span>' +
+        '<span class="browse-stem">' + esc(item.q.question) + '</span>' + badge +
+        '</button></li>';
+    }).join('');
+
+    if (!entry) {
+      viewer.innerHTML = '<h2>No questions match</h2><p class="muted">' +
+        (all.length ? 'Change the filter or show deleted questions.'
+          : 'This set has no questions.') + '</p>';
+      return;
+    }
+
+    var rec = questionRecord(view.set.id, entry.q.id);
+    var multi = C.unitsOf(view.set).length > 1;
+    viewer.innerHTML =
+      '<div class="spread browse-head">' +
+        '<span class="small muted">Question ' + entry.n + ' of ' + all.length +
+          (multi ? ' · ' + esc(entry.unit.title) : '') +
+          ' · <code>' + esc(entry.q.id) + '</code></span>' +
+        '<span class="row browse-step">' +
+          '<button type="button" class="btn btn-sm" id="browse-prev"' +
+            (at <= 0 ? ' disabled' : '') + ' aria-label="Previous question">←</button>' +
+          '<span class="small muted">' + (at + 1) + '/' + list.length + '</span>' +
+          '<button type="button" class="btn btn-sm" id="browse-next"' +
+            (at >= list.length - 1 ? ' disabled' : '') + ' aria-label="Next question">→</button>' +
+        '</span>' +
+      '</div>' +
+      '<p class="small muted browse-record">' +
+        (entry.deleted ? '<span class="tag archived">deleted</span> ' : '') +
+        esc(recordText(rec, Date.now())) + '</p>' +
+      '<div class="row browse-actions">' +
+        (entry.deleted
+          ? '<button type="button" class="btn btn-sm btn-primary" id="browse-restore" ' +
+            'data-browse-restore>Restore question</button>'
+          : '<button type="button" class="btn btn-sm btn-danger" id="browse-delete" ' +
+            'data-browse-delete>Delete question</button>') +
+        '<button type="button" class="btn btn-sm btn-ghost is-danger" id="browse-reset" ' +
+          'data-browse-reset' + (rec ? '' : ' disabled') + '>Reset progress</button>' +
+        (entry.deleted ? '' : '<a class="btn btn-sm" href="' +
+          practiceHref(view.set.id, multi ? entry.unit.id : null, null) + '">Practice ' +
+          (multi ? 'this unit' : 'this set') + '</a>') +
+      '</div>' +
+      '<div class="browse-question">' + staticQuestionHTML(entry.q) + '</div>';
+
+    var selected = listEl.querySelector('[aria-current="true"]');
+    if (selected) {
+      selected.scrollIntoView({ block: 'nearest' });
+      if (focusList) selected.focus({ preventScroll: true });
+    }
+    if (focusId) {
+      var again = document.getElementById(focusId);
+      if (again && !again.disabled) again.focus({ preventScroll: true });
+      else viewer.focus({ preventScroll: true });
+    }
+  }
+
+  function shareTier(share) {
+    return C.tierOf(Math.round(share / 10), 1).key;
   }
 
   /* ------------------------------------------------------------ practice */
@@ -2411,6 +2762,21 @@
   });
 
   /* ------------------------------------------------------------ keyboard */
+  /* In the browser, ← → and J K step through the filtered list. */
+  document.addEventListener('keydown', function (event) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    if (parseHash().path !== '/browse' || !browseView) return;
+    if (document.querySelector('dialog[open]')) return;
+    var tag = (event.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+    var key = event.key;
+    var step = key === 'ArrowLeft' || key === 'k' ? -1
+      : key === 'ArrowRight' || key === 'j' ? 1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    stepBrowse(browseView, step);
+  });
+
   function focusChoice(index) {
     var button = $('#choices .choice[data-i="' + index + '"]');
     if (button && !button.disabled) button.focus();

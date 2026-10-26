@@ -452,6 +452,7 @@
       local: {},
       archived: {},
       archivedUnits: {},
+      deleted: {},
       days: {},
       settings: {
         length: DEFAULT_SESSION_LENGTH,
@@ -521,6 +522,17 @@
       setId: setId,
       setTitle: text(entry.setTitle),
       archivedAt: typeof entry.archivedAt === 'number' ? entry.archivedAt : now
+    };
+  }
+
+  /* A delete mark is { on, at }: whether the question is deleted, and when
+   * that was last decided. A restore keeps the mark with on=false, so a merge
+   * with an older copy that still has it deleted does not bring it back. */
+  function sanitizeDeleted(entry) {
+    if (!entry || typeof entry !== 'object' || typeof entry.on !== 'boolean') return null;
+    return {
+      on: entry.on,
+      at: typeof entry.at === 'number' && isFinite(entry.at) ? entry.at : 0
     };
   }
 
@@ -601,6 +613,13 @@
            * before unit archives were set-scoped used the bare unit id. */
           state.archivedUnits[unitKey(unit.setId, unit.id)] = unit;
         } catch (err) { /* drop an unusable archived unit */ }
+      });
+    }
+
+    if (raw.deleted && typeof raw.deleted === 'object') {
+      Object.keys(raw.deleted).forEach(function (key) {
+        var mark = sanitizeDeleted(raw.deleted[key]);
+        if (mark) state.deleted[key] = mark;
       });
     }
 
@@ -702,6 +721,8 @@
    *     the result never exceeds the high-water mark of either side;
    *   - settings, local sets and archives keep the local values, because the
    *     action that triggered the merge happened in this browser;
+   *   - delete marks keep the later decision, then the local one, so a delete
+   *     or a restore made on either side survives;
    *   - creation time is the earlier of the two and the schema comes from the
    *     server;
    *   - the result is sanitized so the archive invariants (an archived set is
@@ -732,6 +753,7 @@
       local: {},
       archived: {},
       archivedUnits: {},
+      deleted: {},
       days: {},
       settings: local.settings,
       totals: {
@@ -779,6 +801,11 @@
       raw.archivedUnits[key] = local.archivedUnits && local.archivedUnits[key] != null
         ? local.archivedUnits[key]
         : server.archivedUnits[key];
+    });
+    unionKeys(server.deleted, local.deleted).forEach(function (key) {
+      var s = sanitizeDeleted(server.deleted && server.deleted[key]);
+      var l = sanitizeDeleted(local.deleted && local.deleted[key]);
+      raw.deleted[key] = !s || (l && l.at >= s.at) ? l : s;
     });
 
     return sanitizeState(raw, now);
@@ -1148,6 +1175,86 @@
     return removed;
   }
 
+  /* Forget one question's history, mastery share and review date. */
+  function resetQuestionProgress(state, setId, questionId, now) {
+    var key = questionKey(setId, questionId);
+    var had = !!state.q[key];
+    delete state.q[key];
+    state.updated = now || Date.now();
+    return had;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Deleted questions
+   *
+   * Deleting a question hides it from practice, review, mastery and stats;
+   * the question file is never touched and the progress record is kept, so a
+   * restore brings the question back exactly as it was.
+   * ------------------------------------------------------------------ */
+  function isDeleted(state, setId, questionId) {
+    var mark = (state.deleted || {})[questionKey(setId, questionId)];
+    return !!mark && mark.on;
+  }
+
+  function markDeleted(state, setId, questionId, on, now) {
+    now = now || Date.now();
+    if (!state.deleted) state.deleted = {};
+    state.deleted[questionKey(setId, questionId)] = { on: on, at: now };
+    state.updated = now;
+  }
+
+  function deleteQuestion(state, setId, questionId, now) {
+    markDeleted(state, setId, questionId, true, now);
+  }
+
+  function restoreQuestion(state, setId, questionId, now) {
+    markDeleted(state, setId, questionId, false, now);
+  }
+
+  /* The set without its deleted questions. A unit left with no question is
+   * dropped; a set left with no unit comes back as null. The input is
+   * returned unchanged when nothing of it is deleted. */
+  function withoutDeleted(state, set) {
+    var units = unitsOf(set);
+    var changed = false;
+    var kept = [];
+    units.forEach(function (unit) {
+      var questions = unit.questions.filter(function (question) {
+        return !isDeleted(state, set.id, question.id);
+      });
+      if (questions.length !== unit.questions.length) changed = true;
+      if (!questions.length) return;
+      kept.push(questions.length === unit.questions.length ? unit : {
+        id: unit.id,
+        title: unit.title,
+        description: unit.description || '',
+        questions: questions
+      });
+    });
+    if (!changed) return set;
+    if (!kept.length) return null;
+    var out = withUnits(set, kept);
+    if (set.kind) out.kind = set.kind;
+    if (typeof set.archivedAt === 'number') out.archivedAt = set.archivedAt;
+    return out;
+  }
+
+  /* Every deleted question still present in the given sets, newest delete
+   * first. Pass browse sets, which still carry deleted questions. */
+  function deletedQuestions(state, sets) {
+    var rows = [];
+    (sets || []).forEach(function (set) {
+      unitsOf(set).forEach(function (unit) {
+        unit.questions.forEach(function (question) {
+          var mark = (state.deleted || {})[questionKey(set.id, question.id)];
+          if (!mark || !mark.on) return;
+          rows.push({ set: set, unit: unit, q: question, at: mark.at });
+        });
+      });
+    });
+    return rows.sort(function (a, b) { return b.at - a.at; });
+  }
+
   /* ------------------------------------------------------------------ *
    * Per-set activity and archive
    * ------------------------------------------------------------------ */
@@ -1464,9 +1571,21 @@
   }
 
   /* Active sets in source order, with archived sets removed and archived units
-   * filtered out. A browser-local copy wins over the loaded source for the same
-   * set id, because it exists only for content the source no longer carries. */
+   * and deleted questions filtered out. A browser-local copy wins over the
+   * loaded source for the same set id, because it exists only for content the
+   * source no longer carries. */
   function activeSets(state, sourceSets) {
+    var out = [];
+    browseSets(state, sourceSets).forEach(function (set) {
+      var kept = withoutDeleted(state, set);
+      if (kept) out.push(kept);
+    });
+    return out;
+  }
+
+  /* The active sets as activeSets() lists them, but with deleted questions
+   * still in place: the question browser shows them so they can be restored. */
+  function browseSets(state, sourceSets) {
     var byId = {};
     var order = [];
     (sourceSets || []).forEach(function (set) {
@@ -1531,7 +1650,8 @@
         merged.push(cloneUnit(unit));
       });
       seen[set.id] = true;
-      out.push(merged.length === units.length ? set : withUnits(set, merged));
+      out.push(merged.length === units.length ? set
+        : withoutDeleted(state, withUnits(set, merged)));
     });
 
     /* A set whose every unit is archived no longer appears in activeSets, but
@@ -1547,17 +1667,19 @@
         units.push(cloneUnit(other));
       });
       seen[unit.setId] = true;
-      out.push(withUnits({
+      var synthesized = withoutDeleted(state, withUnits({
         id: unit.setId,
         title: unit.setTitle || unit.setId,
         description: ''
       }, units));
+      if (synthesized) out.push(synthesized);
     });
 
     archivedSets(state).forEach(function (set) {
       if (set.kind === 'unit' || seen[set.id]) return;
       seen[set.id] = true;
-      out.push(set);
+      var kept = withoutDeleted(state, set);
+      if (kept) out.push(kept);
     });
     return out;
   }
@@ -1566,6 +1688,17 @@
    * archived snapshot. */
   function findSet(state, sourceSets, setId) {
     var sets = activeSets(state, sourceSets);
+    for (var i = 0; i < sets.length; i++) {
+      if (sets[i].id === setId) return sets[i];
+    }
+    var archived = (state.archived || {})[setId];
+    return archived ? withoutDeleted(state, archived) : null;
+  }
+
+  /* A set for the question browser: like findSet(), but deleted questions
+   * stay in place. */
+  function findBrowseSet(state, sourceSets, setId) {
+    var sets = browseSets(state, sourceSets);
     for (var i = 0; i < sets.length; i++) {
       if (sets[i].id === setId) return sets[i];
     }
@@ -1624,6 +1757,12 @@
     makeSessionSnapshot: makeSessionSnapshot,
     restoreSessionSnapshot: restoreSessionSnapshot,
     resetSetProgress: resetSetProgress,
+    resetQuestionProgress: resetQuestionProgress,
+    isDeleted: isDeleted,
+    deleteQuestion: deleteQuestion,
+    restoreQuestion: restoreQuestion,
+    withoutDeleted: withoutDeleted,
+    deletedQuestions: deletedQuestions,
     setStats: setStats,
     unitStats: unitStats,
     allSetStats: allSetStats,
@@ -1637,9 +1776,11 @@
     restoreSet: restoreSet,
     restoreUnit: restoreUnit,
     activeSets: activeSets,
+    browseSets: browseSets,
     archivedSets: archivedSets,
     allSets: allSets,
     findSet: findSet,
+    findBrowseSet: findBrowseSet,
     dueCount: dueCount,
     activeDueCount: activeDueCount
   };

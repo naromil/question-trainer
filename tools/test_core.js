@@ -1661,3 +1661,88 @@ test('activity/streak: local days survive DST transitions', { skip: process.plat
     'the fall-back window has no duplicate local keys');
   assert.equal(new Set(out.fall).size, out.fall.length);
 });
+
+test('deleteQuestion: hides a question from practice, mastery and stats', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', title: 'Unit One', questions: [question({ id: 'q1' }), question({ id: 'q2' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q3' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[0], 1, NOW);
+  C.deleteQuestion(state, set.id, 'q2', NOW + 1);
+
+  assert.equal(C.isDeleted(state, set.id, 'q2'), true);
+  const active = C.activeSets(state, [set]);
+  assert.deepEqual(C.questionsOf(active[0]).map((q) => q.id), ['q1', 'q3']);
+  assert.equal(C.masteryOf(state, set.id, C.questionsOf(active[0])), 40);
+  assert.equal(C.allSetStats(state, C.allSets(state, [set]), NOW + 2)[0].total, 2);
+  assert.deepEqual(C.questionsOf(C.findSet(state, [set], set.id)).map((q) => q.id), ['q1', 'q3']);
+
+  const browse = C.findBrowseSet(state, [set], set.id);
+  assert.deepEqual(C.questionsOf(browse).map((q) => q.id), ['q1', 'q2', 'q3'],
+    'the browser still shows the deleted question');
+  assert.deepEqual(C.deletedQuestions(state, C.browseSets(state, [set])).map((row) => row.q.id),
+    ['q2']);
+
+  C.restoreQuestion(state, set.id, 'q2', NOW + 3);
+  assert.equal(C.isDeleted(state, set.id, 'q2'), false);
+  assert.deepEqual(C.questionsOf(C.activeSets(state, [set])[0]).map((q) => q.id),
+    ['q1', 'q2', 'q3']);
+});
+
+test('deleteQuestion: a unit or set with every question deleted leaves the list', () => {
+  const set = loadSet(
+    rawSet({ id: 'u1', title: 'Unit One', questions: [question({ id: 'q1' })] }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q2' })] })
+  );
+  const state = C.emptyState(NOW);
+  C.deleteQuestion(state, set.id, 'q1', NOW);
+  assert.deepEqual(C.activeSets(state, [set])[0].units.map((unit) => unit.id), ['u2']);
+  C.deleteQuestion(state, set.id, 'q2', NOW + 1);
+  assert.deepEqual(C.activeSets(state, [set]), []);
+  assert.deepEqual(C.allSets(state, [set]), []);
+  assert.equal(C.browseSets(state, [set]).length, 1);
+});
+
+test('deleteQuestion: an archived set leaves its deleted questions out', () => {
+  const set = loadSet(rawSet({ questions: [question({ id: 'q1' }), question({ id: 'q2' })] }));
+  const state = C.emptyState(NOW);
+  C.deleteQuestion(state, set.id, 'q1', NOW);
+  C.archiveSet(state, set, NOW + 1);
+  const found = C.findSet(state, [set], set.id);
+  assert.deepEqual(C.questionsOf(found).map((q) => q.id), ['q2']);
+  assert.equal(found.kind, 'set');
+  assert.deepEqual(C.questionsOf(C.findBrowseSet(state, [set], set.id)).map((q) => q.id),
+    ['q1', 'q2']);
+  assert.equal(C.allSetStats(state, C.allSets(state, [set]), NOW + 2)[0].total, 1);
+});
+
+test('deleted marks: sanitized, and a merge keeps the later decision', () => {
+  const key = C.questionKey('set-1', 'q1');
+  const raw = C.emptyState(NOW);
+  raw.deleted = { [key]: { on: true, at: NOW }, bad: { on: 'yes' }, worse: null };
+  assert.deepEqual(C.sanitizeState(raw, NOW).deleted, { [key]: { on: true, at: NOW } });
+
+  const server = C.emptyState(NOW);
+  const local = C.emptyState(NOW);
+  C.deleteQuestion(server, 'set-1', 'q1', NOW);
+  C.restoreQuestion(local, 'set-1', 'q1', NOW + 5);
+  assert.equal(C.isDeleted(C.mergeStates(server, local, NOW + 6), 'set-1', 'q1'), false,
+    'a newer restore is not undone by the older delete');
+  assert.equal(C.isDeleted(C.mergeStates(local, server, NOW + 6), 'set-1', 'q1'), false);
+
+  C.deleteQuestion(server, 'set-1', 'q2', NOW + 9);
+  assert.equal(C.isDeleted(C.mergeStates(server, local, NOW + 10), 'set-1', 'q2'), true,
+    'a delete only one side knows about survives');
+});
+
+test('resetQuestionProgress: forgets one question and keeps its neighbours', () => {
+  const set = loadSet(rawSet({ questions: [question({ id: 'q1' }), question({ id: 'q2' })] }));
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[0], 1, NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[1], 1, NOW);
+  assert.equal(C.resetQuestionProgress(state, set.id, 'q1', NOW + 1), true);
+  assert.equal(state.q[C.questionKey(set.id, 'q1')], undefined);
+  assert.ok(state.q[C.questionKey(set.id, 'q2')]);
+  assert.equal(C.resetQuestionProgress(state, set.id, 'q1', NOW + 2), false);
+});
