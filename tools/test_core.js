@@ -349,6 +349,32 @@ test('questions/index.json and its set folders are valid fixed-format data', () 
   assert.ok(multiUnitSets >= 1, 'at least one shipped set is made of several units');
 });
 
+test('questions in the bank do not give the answer away by its length', () => {
+  const root = path.join(__dirname, '..', 'questions');
+  const index = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8'));
+  let total = 0;
+  let longest = 0;
+  index.sets.forEach((name) => {
+    const folder = JSON.parse(fs.readFileSync(path.join(root, name, 'index.json'), 'utf8'));
+    folder.units.forEach((file) => {
+      const unit = JSON.parse(fs.readFileSync(path.join(root, name, file), 'utf8'));
+      unit.questions.forEach((item) => {
+        const right = item.choices[item.answer].length;
+        const wrong = Math.max(...item.choices.filter((_, i) => i !== item.answer).map((c) => c.length));
+        total += 1;
+        if (right > wrong) longest += 1;
+        // Short one-word choices vary naturally; only sentence-length ones can be a tell.
+        if (Math.max(right, wrong) >= 30) {
+          assert.ok(right <= wrong * 1.1,
+            `${name}/${file} ${item.id}: right answer is ${right} chars, longest wrong one ${wrong}`);
+        }
+      });
+    });
+  });
+  assert.ok(longest / total <= 1 / 3,
+    `the right answer is the longest choice in ${longest} of ${total} questions`);
+});
+
 test('letterFor and questionKey: labels and progress keys are unambiguous', () => {
   assert.equal(C.letterFor(0), 'A');
   assert.equal(C.letterFor(25), 'Z');

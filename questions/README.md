@@ -118,6 +118,13 @@ right of its card, each with its own practice, review and archive.
 All strings are trimmed when the files are loaded. Empty optional strings are
 treated as absent.
 
+Write the wrong choices with as much detail as the right one. A correct answer
+that is consistently the longest, most qualified choice can be picked without
+knowing the material. `tools/test_core.js` checks the bank for this: when a
+choice is 30 characters or longer, the right answer may be at most 10% longer
+than the longest wrong one, and across the bank it may be the longest choice in
+at most a third of the questions.
+
 ## Images
 
 Keep image files under `questions/` (for example `questions/images/`) and
