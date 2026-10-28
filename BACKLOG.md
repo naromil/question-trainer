@@ -2,7 +2,7 @@
 
 ## Routine (Claude may build these without asking)
 
-- [ ] Confirm before Import JSON replaces progress — today an import silently overwrites all history, mastery and archives with no prompt.
+- [x] Confirm before Import JSON replaces progress — today an import silently overwrites all history, mastery and archives with no prompt.
 - [ ] Reset the import file input and report read failures — picking the same file twice fires no change event, and a failed `file.text()` is swallowed.
 - [ ] Keyboard shortcut to cross out a choice (e.g. Shift+letter) — today it needs the mouse or tabbing to each cross-out button.
 - [ ] "End session" button that shows Results for the questions answered so far — users expect to stop early without losing the summary.

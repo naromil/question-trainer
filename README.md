@@ -69,7 +69,9 @@ app names the file. In that mode the progress API is not available, so everythin
 stays in `localStorage`; **Settings → Progress data** says which mode is active.
 
 **Settings → Progress data** has separate **Export JSON** and **Import JSON**
-buttons to move progress between machines or origins.
+buttons to move progress between machines or origins. Import replaces all current
+progress, so it first asks for confirmation, showing the answers, sessions and
+archived sets in the current progress and in the file.
 
 ## Application menu
 

@@ -1797,3 +1797,21 @@ test('resetQuestionProgress: forgets one question and keeps its neighbours', () 
   assert.ok(state.q[C.questionKey(set.id, 'q2')]);
   assert.equal(C.resetQuestionProgress(state, set.id, 'q1', NOW + 2), false);
 });
+
+test('progressSummary: counts what an import would replace', () => {
+  assert.deepEqual(C.progressSummary(C.emptyState(NOW)),
+    { answers: 0, sessions: 0, archivedSets: 0, archivedUnits: 0 });
+  const set = C.buildSet(C.normalizeFolder({ id: 'set-1', title: 'Set One', units: ['u.json'] }, 'set-1'),
+    [{ file: 'set-1/u.json', raw: { id: 'u1', title: 'Unit', questions: [question(), question({ id: 'q2' })] } }]).set;
+  const state = C.emptyState(NOW);
+  C.applyAnswer(state, set.id, set.units[0].questions[0], 1, NOW);
+  state.totals.sessions = 2;
+  C.archiveSet(state, set, NOW);
+  const summary = C.progressSummary(state);
+  assert.equal(summary.answers, 1);
+  assert.equal(summary.sessions, 2);
+  assert.equal(summary.archivedSets, 1);
+  assert.equal(summary.archivedUnits, 0);
+  assert.deepEqual(C.progressSummary(null),
+    { answers: 0, sessions: 0, archivedSets: 0, archivedUnits: 0 });
+});

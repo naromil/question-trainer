@@ -1727,6 +1727,18 @@
     return dueCount(state, activeSets(state, sourceSets), now);
   }
 
+  /* Headline counts of a progress state, so the UI can say what an import
+   * would replace and what it brought in. */
+  function progressSummary(state) {
+    var totals = (state && state.totals) || {};
+    return {
+      answers: totals.a || 0,
+      sessions: totals.sessions || 0,
+      archivedSets: Object.keys((state && state.archived) || {}).length,
+      archivedUnits: Object.keys((state && state.archivedUnits) || {}).length
+    };
+  }
+
   return {
     MASTERY: MASTERY,
     SRS_INTERVALS_DAYS: SRS_INTERVALS_DAYS,
@@ -1793,6 +1805,7 @@
     findSet: findSet,
     findBrowseSet: findBrowseSet,
     dueCount: dueCount,
-    activeDueCount: activeDueCount
+    activeDueCount: activeDueCount,
+    progressSummary: progressSummary
   };
 });

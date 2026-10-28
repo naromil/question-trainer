@@ -100,6 +100,14 @@
     }
   }
   function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+  /* "12 answers, 3 sessions, 1 archived set" for import messages. */
+  function summaryText(summary) {
+    var text = plural(summary.answers, 'answer') + ', ' +
+      plural(summary.sessions, 'session') + ', ' +
+      plural(summary.archivedSets, 'archived set');
+    if (summary.archivedUnits) text += ', ' + plural(summary.archivedUnits, 'archived unit');
+    return text;
+  }
   function clampInt(n, lo, hi) { return Math.min(hi, Math.max(lo, n | 0)); }
   function letterFor(index) { return C.letterFor(index); }
   /* The line under a mastery bar. Never-attempted rows omit the first-try
@@ -2554,13 +2562,20 @@
           note.textContent = 'That file is not a progress export from this version.';
           return;
         }
-        state = C.sanitizeState(parsed, Date.now());
+        var incoming = C.sanitizeState(parsed, Date.now());
+        if (!window.confirm('Replace all current progress with this file?\n\n' +
+            'Current: ' + summaryText(C.progressSummary(state)) + '.\n' +
+            'File: ' + summaryText(C.progressSummary(incoming)) + '.\n\n' +
+            'Current history, mastery, archives and settings will be overwritten. ' +
+            'Export first if you want to keep them.')) {
+          note.textContent = 'Import cancelled. Your progress is unchanged.';
+          return;
+        }
+        state = incoming;
         var saved = saveState();
         applyTheme();
         renderPills();
-        note.textContent = 'Imported: ' + state.totals.a + ' answers, ' +
-          state.totals.sessions + ' sessions, ' +
-          Object.keys(state.archived).length + ' archived sets.' +
+        note.textContent = 'Imported: ' + summaryText(C.progressSummary(state)) + '.' +
           (saved ? '' : ' The browser could not save it (storage is full).');
       });
     });
