@@ -1797,3 +1797,100 @@ test('resetQuestionProgress: forgets one question and keeps its neighbours', () 
   assert.ok(state.q[C.questionKey(set.id, 'q2')]);
   assert.equal(C.resetQuestionProgress(state, set.id, 'q1', NOW + 2), false);
 });
+
+test('endSession: stops early, keeps graded answers and survives a reload', () => {
+  const { set, session } = sessionFixture();
+  session.selected = 2;
+  session.excluded = { 0: true };
+  assert.equal(C.endedEarly(session), false, 'a session in progress has not ended');
+
+  C.endSession(session);
+  assert.equal(session.index, session.questions.length);
+  assert.equal(session.selected, null, 'an unchecked selection is not graded');
+  assert.deepEqual(session.excluded, {});
+  assert.equal(session.checked, false);
+  assert.equal(session.results.length, 1, 'the answered question keeps its grade');
+  assert.equal(C.endedEarly(session), true);
+
+  const restored = C.restoreSessionSnapshot(C.makeSessionSnapshot(session, 100), set);
+  assert.ok(restored, 'an ended session restores to its results');
+  assert.equal(restored.index, restored.questions.length);
+  assert.equal(C.endedEarly(restored), true);
+
+  const finished = Object.assign({}, restored, {
+    results: restored.results.concat([Object.assign({}, restored.results[0], { index: 1 })])
+  });
+  assert.equal(C.endedEarly(finished), false, 'answering every question is not early');
+});
+
+test('endSession: a checked last answer is kept', () => {
+  const { session } = sessionFixture();
+  session.checked = true;
+  session.index = 0;
+  C.endSession(session);
+  assert.equal(session.results.length, 1);
+  assert.equal(session.index, session.questions.length);
+});
+
+test('parseProgressImport: accepts an export and refuses everything else', () => {
+  const exported = C.emptyState(NOW - DAY);
+  exported.totals = { a: 7, c: 5, sessions: 2 };
+  exported.q['set-1::q1'] = { a: 2, c: 1, f: 0, s: 550, box: 1, due: NOW, last: NOW };
+  const ok = C.parseProgressImport(JSON.stringify(exported), NOW);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.state.app, C.STATE_APP);
+  assert.equal(ok.state.totals.a, 7);
+  assert.equal(Object.keys(ok.state.q).length, 1);
+
+  const refused = (raw) => C.parseProgressImport(raw, NOW);
+  assert.equal(refused('{not json').reason, 'json');
+  assert.equal(refused('').reason, 'json');
+  assert.equal(refused(undefined).reason, 'json');
+  assert.equal(refused('null').reason, 'not-export');
+  assert.equal(refused('[]').reason, 'not-export');
+  assert.equal(refused('"question-trainer"').reason, 'not-export');
+  assert.equal(refused('{"app":"other","v":1}').reason, 'not-export');
+  const version = refused('{"app":"question-trainer","v":2}');
+  assert.equal(version.reason, 'version');
+  assert.match(version.message, /v=2/);
+  assert.match(refused('{"app":"question-trainer"}').message, /v=null/);
+  assert.equal(refused('{').ok, false);
+  assert.ok(refused('{').message, 'every refusal carries a message');
+});
+
+test('parseProgressImport: a hand-edited export is sanitised, not trusted', () => {
+  const result = C.parseProgressImport(JSON.stringify({
+    app: 'question-trainer',
+    v: 1,
+    q: { 'set-1::q1': { a: 3, c: 9, s: 5000 }, 'set-1::q2': 'junk' },
+    archived: { broken: { id: 'broken' } },
+    totals: { a: -4, c: 'x', sessions: 3 }
+  }), NOW);
+  assert.equal(result.ok, true);
+  assert.deepEqual(Object.keys(result.state.q), ['set-1::q1']);
+  assert.equal(result.state.q['set-1::q1'].c, 3, 'correct count clamped to attempts');
+  assert.equal(result.state.q['set-1::q1'].s, 1000, 'share clamped');
+  assert.deepEqual(result.state.archived, {}, 'an unusable archive entry is dropped');
+});
+
+test('progressSummary: counts what an import replaces', () => {
+  const state = C.emptyState(NOW);
+  assert.deepEqual(C.progressSummary(state),
+    { answers: 0, sessions: 0, questions: 0, archivedSets: 0, archivedUnits: 0 });
+  state.totals = { a: 12, c: 9, sessions: 3 };
+  state.q['s::a'] = { a: 1 };
+  state.q['s::b'] = { a: 1 };
+  state.archived.s = {};
+  state.archivedUnits['t::u'] = {};
+  assert.deepEqual(C.progressSummary(state),
+    { answers: 12, sessions: 3, questions: 2, archivedSets: 1, archivedUnits: 1 });
+});
+
+test('pageTitle: screen, then subject, then the app name', () => {
+  assert.equal(C.pageTitle(['Practice', 'Biology · Cells']),
+    'Practice · Biology · Cells — Question Trainer');
+  assert.equal(C.pageTitle(['Settings']), 'Settings — Question Trainer');
+  assert.equal(C.pageTitle(['Browse', '', null, '  ']), 'Browse — Question Trainer');
+  assert.equal(C.pageTitle([]), 'Question Trainer');
+  assert.equal(C.pageTitle(), 'Question Trainer');
+});

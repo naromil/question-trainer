@@ -18,6 +18,7 @@
   var DAY_MS = 86400000;
   var STATE_VERSION = 1;
   var STATE_APP = 'question-trainer';
+  var APP_TITLE = 'Question Trainer';
   var SESSION_LENGTHS = [5, 10, 15, 20, 30, 50];
   var DEFAULT_SESSION_LENGTH = 10;
   /* Lengths offered by older versions are still honoured on import, so an
@@ -1054,6 +1055,23 @@
     };
   }
 
+  /* Stop a session before its last question. The answers given so far keep
+   * their grades; an unchecked selection and its cross-outs are dropped, and
+   * the cursor moves past the end so the session shows its results. */
+  function endSession(session) {
+    session.index = session.questions.length;
+    session.selected = null;
+    session.excluded = {};
+    session.checked = false;
+    return session;
+  }
+
+  /* A finished session answered every question; one stopped early did not. */
+  function endedEarly(session) {
+    return session.index >= session.questions.length &&
+      session.results.length < session.questions.length;
+  }
+
   function finiteNumber(value) {
     return typeof value === 'number' && isFinite(value);
   }
@@ -1727,6 +1745,60 @@
     return dueCount(state, activeSets(state, sourceSets), now);
   }
 
+  /* ------------------------------------------------------------------ *
+   * Progress import
+   * ------------------------------------------------------------------ */
+  /* Read the text of an Import JSON file. A file that does not parse, is not
+   * a progress export or comes from another state version is refused with a
+   * message the page can show as is; anything else sanitises to a state. */
+  function parseProgressImport(raw, now) {
+    var parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      return { ok: false, reason: 'json', message: 'That file is not valid JSON.' };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+        parsed.app !== STATE_APP) {
+      return {
+        ok: false,
+        reason: 'not-export',
+        message: 'That file is not a Question Trainer progress export.'
+      };
+    }
+    if (parsed.v !== STATE_VERSION) {
+      return {
+        ok: false,
+        reason: 'version',
+        message: 'That progress export is from an unsupported version (v=' +
+          JSON.stringify(parsed.v === undefined ? null : parsed.v) + ').'
+      };
+    }
+    return { ok: true, state: sanitizeState(parsed, now) };
+  }
+
+  /* The counts an import replaces or brings in, for the confirmation and the
+   * note after it. */
+  function progressSummary(state) {
+    return {
+      answers: state.totals.a,
+      sessions: state.totals.sessions,
+      questions: Object.keys(state.q).length,
+      archivedSets: Object.keys(state.archived).length,
+      archivedUnits: Object.keys(state.archivedUnits).length
+    };
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Page title
+   * ------------------------------------------------------------------ */
+  /* "Practice · Biology — Question Trainer": what the screen is, then what it
+   * is about. Empty parts drop out; with none the title is the app name. */
+  function pageTitle(parts) {
+    var named = (parts || []).map(text).filter(function (part) { return part; });
+    return named.length ? named.join(' · ') + ' — ' + APP_TITLE : APP_TITLE;
+  }
+
   return {
     MASTERY: MASTERY,
     SRS_INTERVALS_DAYS: SRS_INTERVALS_DAYS,
@@ -1766,6 +1838,8 @@
     dueQuestions: dueQuestions,
     selectSession: selectSession,
     makeSessionSnapshot: makeSessionSnapshot,
+    endSession: endSession,
+    endedEarly: endedEarly,
     restoreSessionSnapshot: restoreSessionSnapshot,
     resetSetProgress: resetSetProgress,
     resetQuestionProgress: resetQuestionProgress,
@@ -1793,6 +1867,9 @@
     findSet: findSet,
     findBrowseSet: findBrowseSet,
     dueCount: dueCount,
-    activeDueCount: activeDueCount
+    activeDueCount: activeDueCount,
+    parseProgressImport: parseProgressImport,
+    progressSummary: progressSummary,
+    pageTitle: pageTitle
   };
 });
