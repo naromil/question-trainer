@@ -2,12 +2,12 @@
 
 ## Routine (Claude may build these without asking)
 
-- [ ] Confirm before Import JSON replaces progress — today an import silently overwrites all history, mastery and archives with no prompt.
-- [ ] Reset the import file input and report read failures — picking the same file twice fires no change event, and a failed `file.text()` is swallowed.
-- [ ] Keyboard shortcut to cross out a choice (e.g. Shift+letter) — today it needs the mouse or tabbing to each cross-out button.
-- [ ] "End session" button that shows Results for the questions answered so far — users expect to stop early without losing the summary.
-- [ ] Per-route `document.title` (e.g. "Practice · <set> — Question Trainer") — tabs, history and screen readers all show the same title today.
-- [ ] Move progress-import validation into `core.js` with node tests — the check lives untested in `app.js`.
+- [x] Confirm before Import JSON replaces progress — today an import silently overwrites all history, mastery and archives with no prompt.
+- [x] Reset the import file input and report read failures — picking the same file twice fires no change event, and a failed `file.text()` is swallowed.
+- [x] Keyboard shortcut to cross out a choice (e.g. Shift+letter) — today it needs the mouse or tabbing to each cross-out button.
+- [x] "End session" button that shows Results for the questions answered so far — users expect to stop early without losing the summary.
+- [x] Per-route `document.title` (e.g. "Practice · <set> — Question Trainer") — tabs, history and screen readers all show the same title today.
+- [x] Move progress-import validation into `core.js` with node tests — the check lives untested in `app.js`.
 - [ ] Date-stamp the exported progress file name — repeated exports all download as `question-trainer-progress.json`.
 - [ ] Run the bank-shape and serving tests against a tracked fixture when `questions/` is absent — a fresh clone fails `test_core.js` and `test_server.py` only for lack of local data.
 - [ ] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
