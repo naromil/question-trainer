@@ -374,7 +374,7 @@ kbd {
   font-size: 1rem; font-weight: 650; line-height: 1.35; margin: 0;
 }
 .prac-head .head-title .head-mode { font-weight: 400; }
-.prac-tools { display: flex; gap: .4rem; align-items: center; margin-left: auto; }
+.prac-tools { display: flex; gap: .4rem; align-items: center; margin-left: auto; flex-wrap: wrap; }
 .prac-tools .pill { display: inline-flex; align-items: center; gap: .28rem; font-variant-numeric: tabular-nums; }
 .mastery-pill b { color: var(--ink); font-weight: 650; }
 .mastery-pill.is-up { animation: chip-up .55s ease-out; }
@@ -978,6 +978,7 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .mastery-pill { order: 1; }
   .streak-chip { order: 2; }
   .timer-pill { order: 3; }
+  #end-session { order: 4; }
   .results-head { flex-wrap: wrap; }
   .score-ring { width: 92px; height: 92px; }
   .score-inner b { font-size: 1.25rem; }

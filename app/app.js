@@ -842,6 +842,12 @@
   });
 
   /* ------------------------------------------------------------ routing */
+  /* Every screen names itself in the tab, the history list and to screen
+   * readers: "Practice · <set> — Question Trainer". */
+  function setPageTitle(parts) {
+    document.title = C.pageTitle(parts);
+  }
+
   function parseHash() {
     var raw = location.hash.replace(/^#/, '') || '/';
     var cut = raw.indexOf('?');
@@ -1059,6 +1065,7 @@
   }
 
   function renderHome() {
+    setPageTitle(['Sets']);
     var active = C.activeSets(state, SOURCE_SETS);
     var archived = C.archivedSets(state);
     var all = C.allSets(state, SOURCE_SETS);
@@ -1223,6 +1230,7 @@
   }
 
   function renderArchive() {
+    setPageTitle(['Archive']);
     var rows = C.archivedSets(state);
     var now = Date.now();
     var html = '<div class="card"><h1>Archive</h1>' +
@@ -1354,6 +1362,8 @@
     var unitId = params.get('unit') || '';
     if (unitId && !C.unitOf(set, unitId)) unitId = '';
     var current = params.get('q') || '';
+    var browseUnit = unitId ? C.unitOf(set, unitId) : null;
+    setPageTitle(['Browse', browseUnit ? set.title + ' · ' + browseUnit.title : set.title]);
     var all = browseEntries(set);
     var deletedCount = all.filter(function (entry) { return entry.deleted; }).length;
     var archived = !!state.archived[set.id];
@@ -1623,6 +1633,7 @@
   }
 
   function renderMissingSet(setId) {
+    setPageTitle(['Set not found']);
     appEl.innerHTML = '<div class="card"><h2>Question set not found</h2>' +
       '<p>No set with id <code>' + esc(setId) + '</code> is loaded from ' +
       '<code>questions/index.json</code> or archived.</p>' +
@@ -1630,6 +1641,7 @@
   }
 
   function renderMissingUnit(set, unitId) {
+    setPageTitle(['Unit not found', set.title]);
     appEl.innerHTML = '<div class="card"><h2>Unit not found</h2>' +
       '<p>' + esc(set.title) + ' has no unit with id <code>' + esc(unitId) +
       '</code>. It may have been archived or removed from the folder.</p>' +
@@ -1637,6 +1649,7 @@
   }
 
   function renderEmptySession() {
+    setPageTitle([session ? modeLabel(session.cfg.mode) : 'Practice', sessionTitle()]);
     var review = session && session.cfg.mode === 'review';
     appEl.innerHTML = '<div class="card"><h2>' +
       (review ? 'Nothing is due for review' : 'Nothing to practice here') + '</h2>' +
@@ -1686,6 +1699,7 @@
     if (!session || !session.questions.length) { renderEmptySession(); return; }
     if (session.index >= session.questions.length) { renderResults(); return; }
 
+    setPageTitle([modeLabel(session.cfg.mode), sessionTitle()]);
     var record = state.sets[set.id] || {};
     var questions = C.questionsOf(set);
     var mastery = C.masteryOf(state, set.id, questions);
@@ -1707,6 +1721,9 @@
               (run >= 2 ? '' : ' hidden') + ' title="Correct answers in a row in this set">' +
               '🔥 <b id="streak-value">' + run + '</b></span>' +
             '<span class="pill timer-pill" id="timer">0:00</span>' +
+            '<button type="button" class="btn btn-ghost btn-sm" id="end-session"' +
+              ' title="Stop here and see the results for the questions answered so far">' +
+              'End session</button>' +
           '</div>' +
         '</div>' +
         '<div class="dots" id="dots" aria-hidden="true"></div>' +
@@ -1719,7 +1736,25 @@
      * question still takes the entrance animation. */
     var keep = session.index > 0 || session.checked || session.selected != null ||
       Object.keys(session.excluded).length > 0 || session.results.length > 0;
+    document.getElementById('end-session').addEventListener('click', endSessionEarly);
     showQuestion(session.index, keep);
+  }
+
+  /* Stop before the last question. With answers to show this is the results
+   * screen; with none there is nothing to summarise, so it returns to the
+   * sets. Answers already given were saved when they were checked. */
+  function endSessionEarly() {
+    if (!session || session.index >= session.questions.length) return;
+    if (!session.results.length) {
+      session = null;
+      clearStoredSession();
+      location.hash = '#/';
+      return;
+    }
+    C.endSession(session);
+    persistSession();
+    renderResults();
+    window.scrollTo(0, 0);
   }
 
   function resultAt(index) {
@@ -1813,7 +1848,7 @@
         '<button type="button" class="btn btn-primary" id="action" disabled>' +
           'Check answer</button>' +
         '<span class="kbdhint"><kbd>A</kbd>–<kbd>Z</kbd> / <kbd>1</kbd>–<kbd>9</kbd> choose · ' +
-          '<kbd>Enter</kbd> check / next</span>' +
+          '<kbd>Shift</kbd>+letter cross out · <kbd>Enter</kbd> check / next</span>' +
         '<button type="button" class="shortcut-help" id="shortcut-help"' +
           ' aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>' +
       '</div>' +
@@ -2126,11 +2161,13 @@
   }
 
   function renderResults() {
+    setPageTitle(['Results', sessionTitle()]);
     pauseTimer();
     var results = session.results.slice().sort(function (a, b) { return a.index - b.index; });
     var correct = results.filter(function (r) { return r.correct; }).length;
     var missed = results.filter(function (r) { return !r.correct; });
     var percent = results.length ? Math.round((correct / results.length) * 100) : 0;
+    var early = C.endedEarly(session);
 
     var delta = results.reduce(function (sum, r) { return sum + r.pointsDelta; }, 0);
     var deltas = delta === 0 ? ''
@@ -2163,9 +2200,12 @@
     var time = fmtTime(elapsedMs());
     appEl.innerHTML =
       '<div class="card"><div class="results-head"><div>' +
-        '<h1 id="results-title" tabindex="-1">Session complete</h1><div class="muted">' +
+        '<h1 id="results-title" tabindex="-1">' +
+          (early ? 'Session ended' : 'Session complete') + '</h1><div class="muted">' +
         esc(sessionTitle()) + ' · ' +
-        esc(modeLabel(session.cfg.mode)) + ' · ' + time + '</div></div>' +
+        esc(modeLabel(session.cfg.mode)) + ' · ' + time +
+        (early ? ' · ' + results.length + ' of ' + session.questions.length + ' answered' : '') +
+        '</div></div>' +
         '<div class="score-ring tier-' + scoreTier + '" id="score-ring">' +
           '<div class="score-inner"><b id="score-value">0%</b><span>score</span></div>' +
         '</div>' +
@@ -2304,6 +2344,7 @@
   }
 
   function renderStats() {
+    setPageTitle(['Progress']);
     var sets = C.allSets(state, SOURCE_SETS);
     var now = Date.now();
     var rows = C.allSetStats(state, sets, now);
@@ -2445,7 +2486,20 @@
     return html;
   }
 
+  /* "12 answers, 3 sessions, 1 archived set": what a progress state holds, as
+   * the import confirmation and its note name it. */
+  function summaryText(summary) {
+    var parts = [
+      plural(summary.answers, 'answer'),
+      plural(summary.sessions, 'session'),
+      plural(summary.archivedSets, 'archived set')
+    ];
+    if (summary.archivedUnits) parts.push(plural(summary.archivedUnits, 'archived unit'));
+    return parts.join(', ');
+  }
+
   function renderSettings(route) {
+    setPageTitle(['Settings']);
     var lengthValues = C.SESSION_LENGTHS.slice();
     /* Keep an imported legacy length visible instead of showing a select whose
      * value does not exist; the next change replaces it with a current one. */
@@ -2544,24 +2598,38 @@
       $('#import-file').click();
     });
     $('#import-file').addEventListener('change', function (event) {
-      var file = event.target.files[0];
+      var input = event.target;
+      var file = input.files[0];
+      /* Clear the input now, so picking the same file again (after a refusal,
+       * a cancelled confirmation or a fix to the file) still fires a change. */
+      input.value = '';
       if (!file) return;
       file.text().then(function (text) {
-        var parsed = null;
-        try { parsed = JSON.parse(text); } catch (err) { parsed = null; }
-        if (!parsed || typeof parsed !== 'object' || parsed.app !== C.STATE_APP ||
-            parsed.v !== C.STATE_VERSION) {
-          note.textContent = 'That file is not a progress export from this version.';
+        var result = C.parseProgressImport(text, Date.now());
+        if (!result.ok) {
+          note.textContent = result.message;
           return;
         }
-        state = C.sanitizeState(parsed, Date.now());
+        if (!window.confirm('Replace your current progress (' +
+            summaryText(C.progressSummary(state)) + ') with the progress in "' + file.name +
+            '" (' + summaryText(C.progressSummary(result.state)) + ')? ' +
+            'Everything here now is overwritten; export it first to keep a copy.')) {
+          note.textContent = 'Import cancelled. Your progress is unchanged.';
+          return;
+        }
+        state = result.state;
         var saved = saveState();
         applyTheme();
         renderPills();
-        note.textContent = 'Imported: ' + state.totals.a + ' answers, ' +
-          state.totals.sessions + ' sessions, ' +
-          Object.keys(state.archived).length + ' archived sets.' +
+        /* The controls above show the old settings; repaint them from the
+         * imported ones, then report on the fresh page. */
+        renderSettings(route);
+        document.getElementById('note').textContent = 'Imported: ' +
+          summaryText(C.progressSummary(state)) + '.' +
           (saved ? '' : ' The browser could not save it (storage is full).');
+      }, function (err) {
+        note.textContent = 'Could not read "' + file.name + '"' +
+          (err && err.message ? ': ' + err.message : '') + '. Your progress is unchanged.';
       });
     });
     $('#reset').addEventListener('click', function () {
@@ -2581,6 +2649,7 @@
 
   /* ------------------------------------------------------------ format */
   function renderFormat() {
+    setPageTitle(['Format']);
     var indexExample = JSON.stringify({ sets: ['example-set'] }, null, 2);
     var folderExample = JSON.stringify({
       id: 'example-set',
@@ -2806,6 +2875,18 @@
     }
   }
 
+  /* The choice a key names: A–Z, or 1–9. Caps Lock still types a letter that
+   * chooses; with Shift held a digit key reports its symbol (Shift+1 is "!"),
+   * so digits are read from the physical key instead. */
+  function choiceKeyIndex(event) {
+    var key = (event.key || '').toUpperCase();
+    if (key.length === 1 && key >= 'A' && key <= 'Z') return key.charCodeAt(0) - 65;
+    var number = '123456789'.indexOf(key);
+    if (number >= 0) return number;
+    var digit = /^(?:Digit|Numpad)([1-9])$/.exec(event.code || '');
+    return digit && event.shiftKey ? parseInt(digit[1], 10) - 1 : -1;
+  }
+
   function focusQuestionOrMain() {
     var stem = document.querySelector('#qcard .stem');
     if (stem) { stem.focus({ preventScroll: true }); return; }
@@ -2815,7 +2896,7 @@
 
   document.addEventListener('keydown', function (event) {
     /* Browser and OS shortcuts such as Ctrl+A or Alt+B must never pick a
-     * choice; Shift alone is still a valid way to type a capital letter. */
+     * choice. Shift is ours: Shift with a choice key crosses that choice out. */
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (parseHash().path !== '/practice' || !session ||
         session.index >= session.questions.length) return;
@@ -2862,13 +2943,13 @@
       }
     }
 
-    var key = event.key.toUpperCase();
-    var index = -1;
-    if (key.length === 1 && key >= 'A' && key <= 'Z') index = key.charCodeAt(0) - 65;
-    var number = '123456789'.indexOf(key);
-    if (number >= 0) index = number;
+    var index = choiceKeyIndex(event);
     if (index >= 0 && index < C.choicesFor(session.questions[session.index]).length) {
       event.preventDefault();
+      if (event.shiftKey) {
+        toggleExcluded(index);
+        return;
+      }
       selectChoice(index);
       /* A letter shortcut also puts the keyboard in the group, so the arrow
        * keys and Tab continue from the chosen option. */
