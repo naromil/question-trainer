@@ -2590,7 +2590,7 @@
       var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
       var link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'question-trainer-progress.json';
+      link.download = C.exportFileName(Date.now());
       link.click();
       URL.revokeObjectURL(link.href);
     });

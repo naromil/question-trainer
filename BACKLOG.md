@@ -8,7 +8,7 @@
 - [x] "End session" button that shows Results for the questions answered so far — users expect to stop early without losing the summary.
 - [x] Per-route `document.title` (e.g. "Practice · <set> — Question Trainer") — tabs, history and screen readers all show the same title today.
 - [x] Move progress-import validation into `core.js` with node tests — the check lives untested in `app.js`.
-- [ ] Date-stamp the exported progress file name — repeated exports all download as `question-trainer-progress.json`.
+- [x] Date-stamp the exported progress file name — repeated exports all download as `question-trainer-progress.json`.
 - [ ] Run the bank-shape and serving tests against a tracked fixture when `questions/` is absent — a fresh clone fails `test_core.js` and `test_server.py` only for lack of local data.
 - [ ] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
 - [ ] fix: wrong padding for "All sets are archived": <img width="1016" height="705" alt="image" src="https://github.com/user-attachments/assets/8d273f15-d1a6-46ee-bc6c-e56910ebacba" />
