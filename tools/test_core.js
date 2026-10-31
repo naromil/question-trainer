@@ -1894,3 +1894,10 @@ test('pageTitle: screen, then subject, then the app name', () => {
   assert.equal(C.pageTitle([]), 'Question Trainer');
   assert.equal(C.pageTitle(), 'Question Trainer');
 });
+
+test('exportFileName: dated with the local day, zero-padded', () => {
+  assert.equal(C.exportFileName(new Date(2026, 9, 31, 23, 59).getTime()),
+    'question-trainer-progress-2026-10-31.json');
+  assert.equal(C.exportFileName(new Date(2027, 0, 5, 0, 1).getTime()),
+    'question-trainer-progress-2027-01-05.json');
+});
