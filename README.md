@@ -69,7 +69,8 @@ app names the file. In that mode the progress API is not available, so everythin
 stays in `localStorage`; **Settings → Progress data** says which mode is active.
 
 **Settings → Progress data** has separate **Export JSON** and **Import JSON**
-buttons to move progress between machines or origins. An import replaces the
+buttons to move progress between machines or origins. An export downloads as
+`question-trainer-progress-YYYY-MM-DD.json`, dated with the local day. An import replaces the
 progress here, so it first asks for confirmation, naming what each side holds
 (answers, sessions, archived sets). A file that is not valid JSON, not a
 progress export, or from another progress version is refused with a message and

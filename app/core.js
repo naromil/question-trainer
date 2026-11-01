@@ -1799,6 +1799,15 @@
     return named.length ? named.join(' · ') + ' — ' + APP_TITLE : APP_TITLE;
   }
 
+  /* ------------------------------------------------------------------ *
+   * Export file name
+   * ------------------------------------------------------------------ */
+  /* "question-trainer-progress-2026-10-31.json": the local day of the export,
+   * so repeated exports sort by date instead of all sharing one name. */
+  function exportFileName(ms) {
+    return 'question-trainer-progress-' + dayKey(ms) + '.json';
+  }
+
   return {
     MASTERY: MASTERY,
     SRS_INTERVALS_DAYS: SRS_INTERVALS_DAYS,
@@ -1870,6 +1879,7 @@
     activeDueCount: activeDueCount,
     parseProgressImport: parseProgressImport,
     progressSummary: progressSummary,
-    pageTitle: pageTitle
+    pageTitle: pageTitle,
+    exportFileName: exportFileName
   };
 });
