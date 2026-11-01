@@ -1832,6 +1832,45 @@ test('endSession: a checked last answer is kept', () => {
   assert.equal(session.index, session.questions.length);
 });
 
+test('removeCurrentQuestion: an unanswered question goes and the next takes its place', () => {
+  const { set, session } = sessionFixture();
+  const [first, second] = session.questions;
+  session.selected = 2;
+  session.excluded = { 0: true };
+  session.index = 0;
+  session.results = [];
+
+  assert.equal(C.removeCurrentQuestion(session), first);
+  assert.deepEqual(session.questions, [second]);
+  assert.equal(session.index, 0, 'the cursor now names the next question');
+  assert.equal(session.selected, null);
+  assert.deepEqual(session.excluded, {});
+
+  const restored = C.restoreSessionSnapshot(C.makeSessionSnapshot(session, 100), set);
+  assert.deepEqual(restored.questions.map((q) => q.id), [second.id]);
+});
+
+test('removeCurrentQuestion: a graded question leaves the results, earlier ones stay', () => {
+  const { session } = sessionFixture();
+  const graded = session.results[0];
+  session.results.push(Object.assign({}, graded, { index: 1, question: session.questions[1] }));
+  session.checked = true;
+
+  C.removeCurrentQuestion(session);
+  assert.deepEqual(session.results, [graded]);
+  assert.equal(session.checked, false);
+  assert.equal(session.index, session.questions.length, 'nothing is left, so the session is over');
+  assert.equal(C.endedEarly(session), false, 'every remaining question was answered');
+});
+
+test('removeCurrentQuestion: past the end of a session it does nothing', () => {
+  const { session } = sessionFixture();
+  C.endSession(session);
+  assert.equal(C.removeCurrentQuestion(session), null);
+  assert.equal(session.questions.length, 2);
+  assert.equal(session.results.length, 1);
+});
+
 test('parseProgressImport: accepts an export and refuses everything else', () => {
   const exported = C.emptyState(NOW - DAY);
   exported.totals = { a: 7, c: 5, sessions: 2 };

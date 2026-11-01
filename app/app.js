@@ -48,6 +48,7 @@
   var pushRetryPending = false;
   var state = loadState();
   var session = null;
+  var questionJustDeleted = false;
   var timer = null;
   /* Home list controls survive re-renders of the page but not a reload. */
   var homeQuery = '';
@@ -1665,6 +1666,24 @@
       '</div></div>';
   }
 
+  /* Practice honours the practice-all switch; review ignores it and keeps
+   * the chosen length as the cap on what is due. A retry link carries its
+   * own count. The count is over the questions this session can serve: the
+   * unit's own list, or the whole set. */
+  function practiceCfg(set, unitId, mode, params) {
+    var pool = C.questionsOf(set, unitId);
+    var requested = parseInt(params.get('n'), 10);
+    var defaultLength = mode === 'review'
+      ? state.settings.length
+      : C.sessionLength(state.settings, pool.length);
+    return {
+      setId: set.id,
+      unitId: unitId,
+      mode: mode,
+      length: clampInt(requested > 0 ? requested : defaultLength, 1, 50)
+    };
+  }
+
   function renderPractice(params) {
     var setId = params.get('set') || '';
     var unitId = params.get('unit') || '';
@@ -1679,21 +1698,7 @@
         session.cfg.mode !== 'retry')) {
       mode = 'practice';
     }
-    /* Practice honours the practice-all switch; review ignores it and keeps
-     * the chosen length as the cap on what is due. A retry link carries its
-     * own count. The count is over the questions this session can serve: the
-     * unit's own list, or the whole set. */
-    var pool = C.questionsOf(set, unitId);
-    var requested = parseInt(params.get('n'), 10);
-    var defaultLength = mode === 'review'
-      ? state.settings.length
-      : C.sessionLength(state.settings, pool.length);
-    var cfg = {
-      setId: set.id,
-      unitId: unitId,
-      mode: mode,
-      length: clampInt(requested > 0 ? requested : defaultLength, 1, 50)
-    };
+    var cfg = practiceCfg(set, unitId, mode, params);
     if (!session || !sameCfg(session.cfg, cfg)) createSession(cfg);
 
     if (!session || !session.questions.length) { renderEmptySession(); return; }
@@ -1757,6 +1762,45 @@
     window.scrollTo(0, 0);
   }
 
+  /* Delete the question on screen and carry on with the next one. The delete
+   * mark is the same one Browse sets, so the question's progress is kept and
+   * it can be restored. */
+  function deleteCurrentQuestion() {
+    if (!session || session.index >= session.questions.length) return;
+    var question = session.questions[session.index];
+    C.deleteQuestion(state, session.cfg.setId, question.id, Date.now());
+    if (!saveState()) {
+      window.alert('The change could not be saved because browser storage is full.');
+    }
+    C.removeCurrentQuestion(session);
+
+    /* Results only ever point at questions still in the session, so an empty
+     * session has nothing to summarise. */
+    if (!session.questions.length) {
+      session = null;
+      clearStoredSession();
+      location.hash = '#/';
+      return;
+    }
+    /* Mastery is now averaged without the question. The default length follows
+     * the pool, so the config is refreshed too, or the next render would see a
+     * different session and start over. */
+    session.set = C.findSet(state, SOURCE_SETS, session.cfg.setId) || session.set;
+    session.cfg = practiceCfg(session.set, session.cfg.unitId || '', session.cfg.mode,
+      parseHash().params);
+    persistSession();
+    window.scrollTo(0, 0);
+    if (session.index >= session.questions.length) {
+      renderResults();
+      return;
+    }
+    questionJustDeleted = true;
+    render();
+    var card = document.getElementById('qcard');
+    if (card) card.classList.add('q-enter');
+    focusQuestionOrMain();
+  }
+
   function resultAt(index) {
     for (var i = 0; i < session.results.length; i++) {
       if (session.results[i].index === index) return session.results[i];
@@ -1812,6 +1856,11 @@
 
   function showQuestion(index, keepState, focusStem) {
     var question = session.questions[index];
+    var deletedNote = questionJustDeleted
+      ? '<p class="deleted-note small" role="status">Question deleted. ' +
+        'Restore it from the <a href="#/archive">Archive</a>.</p>'
+      : '';
+    questionJustDeleted = false;
     if (!keepState) {
       session.selected = null;
       session.checked = false;
@@ -1833,11 +1882,16 @@
     var card = document.getElementById('qcard');
     card.className = 'card';
     card.innerHTML =
+      deletedNote +
       '<div class="q-meta">' +
         '<span class="tag">' + esc(session.set.title) + '</span>' +
         (session.cfg.unitId ? '<span class="tag units">' +
           esc((C.unitOf(session.set, session.cfg.unitId) || {}).title || '') + '</span>' : '') +
         '<span class="tag">' + (index + 1) + ' of ' + session.questions.length + '</span>' +
+        '<button type="button" class="q-delete" id="delete-question"' +
+          ' aria-keyshortcuts="Delete" title="Leave this question out of practice and ' +
+          'review. Restore it from the Archive.">Delete question ' +
+          '<kbd aria-hidden="true">Del</kbd></button>' +
       '</div>' +
       passageHTML(question.passage) +
       figureHTML(question) +
@@ -1872,6 +1926,7 @@
       });
     });
     document.getElementById('action').addEventListener('click', action);
+    document.getElementById('delete-question').addEventListener('click', deleteCurrentQuestion);
     var shortcutHelp = document.getElementById('shortcut-help');
     if (shortcutHelp) {
       shortcutHelp.addEventListener('click', function () {
@@ -2905,6 +2960,14 @@
     var tag = (event.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'a') return;
     var cls = event.target.classList || { contains: function () { return false; } };
+
+    /* Holding the key must not run through the whole session. */
+    if (event.key === 'Delete') {
+      if (event.shiftKey || event.repeat) return;
+      event.preventDefault();
+      deleteCurrentQuestion();
+      return;
+    }
 
     if (event.key === 'Enter' || event.key === ' ') {
       /* A focused choice: Enter checks/advances; Space selects natively. */

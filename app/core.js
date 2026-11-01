@@ -1066,6 +1066,25 @@
     return session;
   }
 
+  /* Take the question at the cursor out of a running session. Its result goes
+   * with it, so a question deleted after grading leaves the score and the
+   * retry list. Questions are answered in order, so every remaining result sits
+   * before the cursor and keeps its index. The cursor now names the next
+   * question, or the end of the session when there is none. Returns the removed
+   * question, or null when the cursor is already past the end. */
+  function removeCurrentQuestion(session) {
+    var index = session.index;
+    if (index >= session.questions.length) return null;
+    var removed = session.questions.splice(index, 1)[0];
+    session.results = session.results.filter(function (record) {
+      return record.index !== index;
+    });
+    session.selected = null;
+    session.excluded = {};
+    session.checked = false;
+    return removed;
+  }
+
   /* A finished session answered every question; one stopped early did not. */
   function endedEarly(session) {
     return session.index >= session.questions.length &&
@@ -1848,6 +1867,7 @@
     selectSession: selectSession,
     makeSessionSnapshot: makeSessionSnapshot,
     endSession: endSession,
+    removeCurrentQuestion: removeCurrentQuestion,
     endedEarly: endedEarly,
     restoreSessionSnapshot: restoreSessionSnapshot,
     resetSetProgress: resetSetProgress,
