@@ -2,16 +2,14 @@
 
 ## Routine (Claude may build these without asking)
 
-- [x] Confirm before Import JSON replaces progress — today an import silently overwrites all history, mastery and archives with no prompt.
-- [x] Reset the import file input and report read failures — picking the same file twice fires no change event, and a failed `file.text()` is swallowed.
-- [x] Keyboard shortcut to cross out a choice (e.g. Shift+letter) — today it needs the mouse or tabbing to each cross-out button.
-- [x] "End session" button that shows Results for the questions answered so far — users expect to stop early without losing the summary.
-- [x] Per-route `document.title` (e.g. "Practice · <set> — Question Trainer") — tabs, history and screen readers all show the same title today.
-- [x] Move progress-import validation into `core.js` with node tests — the check lives untested in `app.js`.
-- [x] Date-stamp the exported progress file name — repeated exports all download as `question-trainer-progress.json`.
+- [ ] fix: wrong padding for "All sets are archived": <img width="1016" height="705" alt="image" src="https://github.com/user-attachments/assets/8d273f15-d1a6-46ee-bc6c-e56910ebacba" />
+- [ ] Undo button on the "Question deleted" note in a session — the Delete key is easy to hit by accident and recovery today means a trip to the Archive.
+- [ ] Show when the next review falls due on the "Nothing is due for review" screen — its copy says "within a day or two", which is wrong since never-missed questions wait 14+ days.
 - [ ] Run the bank-shape and serving tests against a tracked fixture when `questions/` is absent — a fresh clone fails `test_core.js` and `test_server.py` only for lack of local data.
 - [ ] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
-- [ ] fix: wrong padding for "All sets are archived": <img width="1016" height="705" alt="image" src="https://github.com/user-attachments/assets/8d273f15-d1a6-46ee-bc6c-e56910ebacba" />
+- [ ] Press <kbd>/</kbd> to focus the filter box on Sets and Browse — the usual search shortcut; the filters are mouse/Tab-only today.
+- [ ] Forced-colors (Windows high contrast) styles for selected, crossed-out, right and wrong choices — those states rely on colour and opacity that forced-colors mode strips.
+- [ ] <kbd>M</kbd> toggles answer sounds during a session — muting today means leaving the session for Settings.
 
 
 ## Proposed (needs the owner's OK — move to Routine to approve)
