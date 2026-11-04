@@ -147,7 +147,7 @@ once — climb the ladder from 1 day.
   box, then least-recently-answered, then fewest attempts; unseen questions come
   first and ties are randomised. It covers the whole set.
 * **Review** serves only questions that are due (so it can be shorter than the session
-  length, and says so when nothing is due).
+  length). When nothing is due it says when the next review falls due, with the date.
 * Due counters count active sets only. Archived sets keep their review dates and show
   them in the Archive, but do not add to the due totals until restored.
 * Archiving a set never deletes its progress.

@@ -1657,8 +1657,7 @@
     appEl.innerHTML = '<div class="card"><h2>' +
       (review ? 'Nothing is due for review' : 'Nothing to practice here') + '</h2>' +
       '<p class="muted">' + (review
-        ? 'Every question here that you have answered is scheduled for a later date. ' +
-          'Missed questions come back immediately; the rest come back within a day or two.'
+        ? nothingDueText()
         : 'This has no questions to serve.') + '</p>' +
       '<div class="row">' +
         '<a class="btn btn-primary" href="' + practiceHref(
@@ -1666,6 +1665,24 @@
           '">Practice this again</a>' +
         '<a class="btn" href="#/">Back to sets</a>' +
       '</div></div>';
+  }
+
+  /* The empty review screen says when the schedule next asks for something,
+   * since the gaps run from a day to months. */
+  function nothingDueText() {
+    var now = Date.now();
+    var next = session
+      ? C.nextDueAt(state, session.set.id, C.questionsOf(session.set, session.cfg.unitId), now)
+      : null;
+    if (next === null) {
+      return 'No question here is scheduled yet. Questions join the review schedule ' +
+        'once you answer them in practice.';
+    }
+    var days = C.calendarDaysBetween(now, next);
+    var when = days <= 0 ? 'later today' : days === 1 ? 'tomorrow' : 'in ' + days + ' days';
+    return 'The next review is due <strong>' + when + '</strong> (' + esc(fmtDate(next)) + '). ' +
+      'A miss is due again right away; a corrected question comes back after a day ' +
+      'or more, and one you have never missed waits 14 days or more.';
   }
 
   /* Practice honours the practice-all switch; review ignores it and keeps

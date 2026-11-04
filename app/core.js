@@ -953,6 +953,30 @@
     });
   }
 
+  /* When the next review falls due: the earliest due time among answered
+   * questions that are not due yet at `now`, or null when none is waiting
+   * (nothing answered, or everything answered is already due). */
+  function nextDueAt(state, setId, questions, now) {
+    now = typeof now === 'number' ? now : Date.now();
+    var next = null;
+    questions.forEach(function (question) {
+      var rec = recordFor(state, setId, question.id);
+      if (!rec || !(rec.a > 0) || rec.due <= now) return;
+      if (next === null || rec.due < next) next = rec.due;
+    });
+    return next;
+  }
+
+  /* Whole local calendar days from `from` to `to`: 0 for later the same day,
+   * 1 for tomorrow. Rounding absorbs the hour a DST change adds or drops. */
+  function calendarDaysBetween(from, to) {
+    var a = new Date(from);
+    var b = new Date(to);
+    a.setHours(0, 0, 0, 0);
+    b.setHours(0, 0, 0, 0);
+    return Math.round((b.getTime() - a.getTime()) / DAY_MS);
+  }
+
   /* Decorate with a random tiebreak so equal-priority questions come in a
    * different order each session (deterministic when `rng` is provided).
    * Practice goes weakest first, ordered by mastery share, then box, then
@@ -1912,6 +1936,8 @@
     tierOf: tierOf,
     masteryOf: masteryOf,
     dueQuestions: dueQuestions,
+    nextDueAt: nextDueAt,
+    calendarDaysBetween: calendarDaysBetween,
     selectSession: selectSession,
     makeSessionSnapshot: makeSessionSnapshot,
     endSession: endSession,

@@ -2000,3 +2000,38 @@ test('exportFileName: dated with the local day, zero-padded', () => {
   assert.equal(C.exportFileName(new Date(2027, 0, 5, 0, 1).getTime()),
     'question-trainer-progress-2027-01-05.json');
 });
+
+test('nextDueAt: the earliest answered question not yet due, or null', () => {
+  const set = loadSet(rawSet({
+    id: 'u1',
+    questions: [question({ id: 'q1' }), question({ id: 'q2' }), question({ id: 'q3' })]
+  }));
+  const questions = C.questionsOf(set);
+  const state = C.emptyState(NOW);
+  assert.equal(C.nextDueAt(state, set.id, questions, NOW), null, 'nothing answered yet');
+
+  C.applyAnswer(state, set.id, questions[0], questions[0].answer, NOW);
+  assert.equal(C.nextDueAt(state, set.id, questions, NOW), NOW + 14 * DAY,
+    'a never-missed question waits 14 days');
+
+  C.applyAnswer(state, set.id, questions[1], (questions[1].answer + 1) % 2, NOW);
+  assert.equal(C.nextDueAt(state, set.id, questions, NOW), NOW + 14 * DAY,
+    'a miss is due now, so it is not a future review');
+  C.applyAnswer(state, set.id, questions[1], questions[1].answer, NOW);
+  assert.equal(C.nextDueAt(state, set.id, questions, NOW), NOW + DAY,
+    'a corrected question comes back after a day');
+  assert.equal(C.nextDueAt(state, set.id, [questions[2]], NOW), null,
+    'only the questions passed in count');
+  assert.equal(C.nextDueAt(state, set.id, questions, NOW + 20 * DAY), null,
+    'everything is already due');
+});
+
+test('calendarDaysBetween: counts local calendar days, not 24-hour blocks', () => {
+  const morning = new Date(2026, 10, 4, 9, 0, 0).getTime();
+  assert.equal(C.calendarDaysBetween(morning, new Date(2026, 10, 4, 23, 0, 0).getTime()), 0);
+  assert.equal(C.calendarDaysBetween(new Date(2026, 10, 4, 23, 0, 0).getTime(),
+    new Date(2026, 10, 5, 1, 0, 0).getTime()), 1, 'two hours later can be tomorrow');
+  assert.equal(C.calendarDaysBetween(morning, new Date(2026, 10, 18, 8, 0, 0).getTime()), 14);
+  assert.equal(C.calendarDaysBetween(new Date(2026, 2, 1, 12).getTime(),
+    new Date(2026, 3, 1, 12).getTime()), 31, 'across a DST change');
+});
