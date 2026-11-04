@@ -49,6 +49,8 @@
   var state = loadState();
   var session = null;
   var questionJustDeleted = false;
+  /* How to take back the last in-session delete, while its note is shown. */
+  var deleteUndo = null;
   var timer = null;
   /* Home list controls survive re-renders of the page but not a reload. */
   var homeQuery = '';
@@ -1768,6 +1770,8 @@
   function deleteCurrentQuestion() {
     if (!session || session.index >= session.questions.length) return;
     var question = session.questions[session.index];
+    var undo = C.questionRemovalUndo(session);
+    deleteUndo = null;
     C.deleteQuestion(state, session.cfg.setId, question.id, Date.now());
     if (!saveState()) {
       window.alert('The change could not be saved because browser storage is full.');
@@ -1795,10 +1799,40 @@
       return;
     }
     questionJustDeleted = true;
+    deleteUndo = undo;
     render();
     var card = document.getElementById('qcard');
     if (card) card.classList.add('q-enter');
     focusQuestionOrMain();
+  }
+
+  /* Undo on the "Question deleted" note: clear the delete mark and put the
+   * question back in the session where it was, graded feedback and all. It
+   * is offered until the next question is checked or the view is redrawn. */
+  function undoDeleteQuestion() {
+    var undo = deleteUndo;
+    deleteUndo = null;
+    if (!session || !undo || !C.undoQuestionRemoval(session, undo)) {
+      dropDeleteUndo();
+      return;
+    }
+    C.restoreQuestion(state, session.cfg.setId, undo.question.id, Date.now());
+    if (!saveState()) {
+      window.alert('The change could not be saved because browser storage is full.');
+    }
+    session.set = C.findSet(state, SOURCE_SETS, session.cfg.setId) || session.set;
+    session.cfg = practiceCfg(session.set, session.cfg.unitId || '', session.cfg.mode,
+      parseHash().params);
+    persistSession();
+    render();
+    focusQuestionOrMain();
+  }
+
+  /* The note stays, but its Undo no longer applies. */
+  function dropDeleteUndo() {
+    deleteUndo = null;
+    var button = document.getElementById('undo-delete');
+    if (button && button.parentNode) button.parentNode.removeChild(button);
   }
 
   function resultAt(index) {
@@ -1858,8 +1892,11 @@
     var question = session.questions[index];
     var deletedNote = questionJustDeleted
       ? '<p class="deleted-note small" role="status">Question deleted. ' +
-        'Restore it from the <a href="#/archive">Archive</a>.</p>'
+        (deleteUndo ? '<button type="button" class="undo-delete" id="undo-delete">' +
+          'Undo</button> ' : '') +
+        'You can also restore it from the <a href="#/archive">Archive</a>.</p>'
       : '';
+    if (!questionJustDeleted) deleteUndo = null;
     questionJustDeleted = false;
     if (!keepState) {
       session.selected = null;
@@ -1927,6 +1964,8 @@
     });
     document.getElementById('action').addEventListener('click', action);
     document.getElementById('delete-question').addEventListener('click', deleteCurrentQuestion);
+    var undoButton = document.getElementById('undo-delete');
+    if (undoButton) undoButton.addEventListener('click', undoDeleteQuestion);
     var shortcutHelp = document.getElementById('shortcut-help');
     if (shortcutHelp) {
       shortcutHelp.addEventListener('click', function () {
@@ -2174,6 +2213,8 @@
 
   function checkAnswer() {
     if (session.checked || session.selected == null) return;
+    /* An undo would now land behind an answered question. */
+    if (deleteUndo) dropDeleteUndo();
     var question = session.questions[session.index];
     var questions = C.questionsOf(session.set);
     var pointsBefore = C.masteryOf(state, session.set.id, questions);

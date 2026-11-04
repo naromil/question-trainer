@@ -738,6 +738,13 @@ pre.code {
   to { box-shadow: 0 0 0 7px transparent; }
 }
 .deleted-note { margin: 0 0 .6rem; color: var(--ink-2); }
+.undo-delete {
+  padding: .1rem .5rem; margin: 0 .15rem;
+  font: inherit; font-weight: 600; color: var(--blue);
+  background: none; border: 1px solid var(--line-2); border-radius: 6px; cursor: pointer;
+}
+.undo-delete:hover { background: var(--blue-soft); }
+.undo-delete:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* Rarely used, so it stays quiet until it is reached for. */
 .q-delete {
   margin-left: auto; padding: .15rem .45rem;

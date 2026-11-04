@@ -1085,6 +1085,54 @@
     return removed;
   }
 
+  /* What it takes to undo removeCurrentQuestion: the question at the cursor,
+   * its position, its result (if graded) and the selection on it. Take it
+   * just before removing. Returns null when the cursor is past the end. */
+  function questionRemovalUndo(session) {
+    var index = session.index;
+    if (index >= session.questions.length) return null;
+    var result = null;
+    session.results.forEach(function (record) {
+      if (record.index === index) result = record;
+    });
+    var excluded = {};
+    Object.keys(session.excluded || {}).forEach(function (key) {
+      if (session.excluded[key]) excluded[key] = true;
+    });
+    return {
+      index: index,
+      question: session.questions[index],
+      result: result,
+      selected: session.selected,
+      excluded: excluded,
+      checked: session.checked
+    };
+  }
+
+  /* Put a removed question back where it was, with its result and selection.
+   * It only applies while the cursor still names the question that took its
+   * place and nothing at or after it has been answered; otherwise the
+   * session is left alone and false comes back. */
+  function undoQuestionRemoval(session, undo) {
+    if (!undo || !undo.question || undo.index !== session.index ||
+        undo.index > session.questions.length) return false;
+    for (var i = 0; i < session.results.length; i++) {
+      if (session.results[i].index >= undo.index) return false;
+    }
+    session.questions.splice(undo.index, 0, undo.question);
+    if (undo.result) {
+      session.results.push(undo.result);
+      session.results.sort(function (a, b) { return a.index - b.index; });
+    }
+    session.selected = undo.selected;
+    session.excluded = {};
+    Object.keys(undo.excluded || {}).forEach(function (key) {
+      session.excluded[key] = true;
+    });
+    session.checked = !!undo.checked && !!undo.result;
+    return true;
+  }
+
   /* A finished session answered every question; one stopped early did not. */
   function endedEarly(session) {
     return session.index >= session.questions.length &&
@@ -1868,6 +1916,8 @@
     makeSessionSnapshot: makeSessionSnapshot,
     endSession: endSession,
     removeCurrentQuestion: removeCurrentQuestion,
+    questionRemovalUndo: questionRemovalUndo,
+    undoQuestionRemoval: undoQuestionRemoval,
     endedEarly: endedEarly,
     restoreSessionSnapshot: restoreSessionSnapshot,
     resetSetProgress: resetSetProgress,

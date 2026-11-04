@@ -1871,6 +1871,66 @@ test('removeCurrentQuestion: past the end of a session it does nothing', () => {
   assert.equal(session.results.length, 1);
 });
 
+test('undoQuestionRemoval: an unanswered question comes back with its selection', () => {
+  const { session } = sessionFixture();
+  const before = session.questions.slice();
+  session.index = 0;
+  session.results = [];
+  session.selected = 2;
+  session.excluded = { 1: true };
+
+  const undo = C.questionRemovalUndo(session);
+  C.removeCurrentQuestion(session);
+  assert.equal(session.questions.length, 1);
+
+  assert.equal(C.undoQuestionRemoval(session, undo), true);
+  assert.deepEqual(session.questions, before);
+  assert.equal(session.index, 0);
+  assert.equal(session.selected, 2);
+  assert.deepEqual(session.excluded, { 1: true });
+  assert.equal(session.checked, false);
+});
+
+test('undoQuestionRemoval: a graded question gets its result and feedback back', () => {
+  const { session } = sessionFixture();
+  session.questions.push(Object.assign({}, session.questions[1], { id: 'q3' }));
+  const graded = Object.assign({}, session.results[0], { index: 1, question: session.questions[1] });
+  session.results.push(graded);
+  session.selected = 1;
+  session.checked = true;
+
+  const undo = C.questionRemovalUndo(session);
+  C.removeCurrentQuestion(session);
+  assert.equal(session.results.length, 1);
+  assert.equal(session.questions[1].id, 'q3', 'the next question took its place');
+
+  assert.equal(C.undoQuestionRemoval(session, undo), true);
+  assert.equal(session.questions.length, 3);
+  assert.equal(session.questions[1], graded.question);
+  assert.equal(session.questions[2].id, 'q3');
+  assert.deepEqual(session.results.map((r) => r.index), [0, 1]);
+  assert.equal(session.checked, true);
+  assert.equal(session.selected, 1);
+});
+
+test('undoQuestionRemoval: refused once the next question is answered or the cursor moved', () => {
+  const { session } = sessionFixture();
+  session.questions.push(Object.assign({}, session.questions[1], { id: 'q3' }));
+  const undo = C.questionRemovalUndo(session);
+  C.removeCurrentQuestion(session);
+  const answered = Object.assign({}, session.results[0], { index: 1, question: session.questions[1] });
+  session.results.push(answered);
+  assert.equal(C.undoQuestionRemoval(session, undo), false);
+  assert.equal(session.questions.length, 2, 'the session is left alone');
+
+  session.results.pop();
+  session.index = 2;
+  assert.equal(C.undoQuestionRemoval(session, undo), false);
+  assert.equal(C.undoQuestionRemoval(session, null), false);
+  C.endSession(session);
+  assert.equal(C.questionRemovalUndo(session), null, 'nothing to remove past the end');
+});
+
 test('parseProgressImport: accepts an export and refuses everything else', () => {
   const exported = C.emptyState(NOW - DAY);
   exported.totals = { a: 7, c: 5, sessions: 2 };
