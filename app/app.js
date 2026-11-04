@@ -1116,7 +1116,7 @@
         '<div class="set-empty" id="set-empty" hidden></div>' +
         '</section>';
     } else {
-      html += '<div class="card"><h2>' +
+      html += '<div class="card home-empty"><h2>' +
         (archived.length ? 'All sets are archived' : 'No question sets loaded') + '</h2>' +
         '<p class="muted">' + (archived.length
           ? 'Restore a set from the Archive to practice it again.'

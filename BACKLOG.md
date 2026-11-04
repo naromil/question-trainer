@@ -2,7 +2,7 @@
 
 ## Routine (Claude may build these without asking)
 
-- [ ] fix: wrong padding for "All sets are archived": <img width="1016" height="705" alt="image" src="https://github.com/user-attachments/assets/8d273f15-d1a6-46ee-bc6c-e56910ebacba" />
+- [x] fix: wrong padding for "All sets are archived": <img width="1016" height="705" alt="image" src="https://github.com/user-attachments/assets/8d273f15-d1a6-46ee-bc6c-e56910ebacba" />
 - [ ] Undo button on the "Question deleted" note in a session — the Delete key is easy to hit by accident and recovery today means a trip to the Archive.
 - [ ] Show when the next review falls due on the "Nothing is due for review" screen — its copy says "within a day or two", which is wrong since never-missed questions wait 14+ days.
 - [ ] Run the bank-shape and serving tests against a tracked fixture when `questions/` is absent — a fresh clone fails `test_core.js` and `test_server.py` only for lack of local data.
