@@ -1,0 +1,54 @@
+{
+  "id": "places",
+  "title": "Places",
+  "questions": [
+    {
+      "id": "g1",
+      "question": "What is the capital of Australia?",
+      "choices": [
+        "Sydney",
+        "Canberra",
+        "Melbourne",
+        "Perth"
+      ],
+      "answer": 1,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "g2",
+      "question": "Which is the largest ocean?",
+      "choices": [
+        "Atlantic",
+        "Indian",
+        "Arctic",
+        "Pacific"
+      ],
+      "answer": 3,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "g3",
+      "question": "Mount Everest lies in which range?",
+      "choices": [
+        "Himalayas",
+        "Andes",
+        "Alps",
+        "Rockies"
+      ],
+      "answer": 0,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "g4",
+      "question": "Which river flows through Cairo?",
+      "choices": [
+        "Amazon",
+        "Danube",
+        "Nile",
+        "Ganges"
+      ],
+      "answer": 2,
+      "explanation": "Fixture explanation."
+    }
+  ]
+}

@@ -46,6 +46,18 @@ CONTENT_SECURITY_POLICY = (
 )
 
 
+def bank_root() -> Path:
+    """The local question bank, or the tracked fixture when questions/ has none.
+
+    questions/ is git-ignored, so a fresh clone has no data to serve; the
+    fixture in tools/fixture-bank/ has the same folder layout.
+    """
+    local = ROOT / "questions"
+    if (local / "index.json").exists():
+        return local
+    return ROOT / "tools" / "fixture-bank"
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Keep 3xx responses observable instead of following them."""
 
@@ -228,13 +240,15 @@ class TestServer(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertIn(b"Question Trainer", body)
         self.assertIn("text/html", headers.get("Content-Type", ""))
-        status, _, body = http_request("GET", server.base + "/questions/index.json")
+        bank = bank_root()
+        prefix = "/" + bank.relative_to(ROOT).as_posix()
+        status, _, body = http_request("GET", server.base + prefix + "/index.json")
         self.assertEqual(200, status)
         index = json.loads(body)
         self.assertIsInstance(index, dict)
         self.assertTrue(index)
         units = [
-            path for path in (ROOT / "questions").glob("*/*.json")
+            path for path in bank.glob("*/*.json")
             if path.name != "index.json"
         ]
         self.assertTrue(units, "no unit files to serve")
@@ -248,6 +262,10 @@ class TestServer(unittest.TestCase):
         self.assertEqual(404, status)
         self.assertNotIn("text/html", headers.get("Content-Type", ""))
         self.assertNotIn(b"everyday-science", body)
+        self.assertNotIn(b"index.json", body)
+        bank = "/" + bank_root().relative_to(ROOT).as_posix() + "/"
+        status, _, body = http_request("GET", server.base + bank)
+        self.assertEqual(404, status, bank)
         self.assertNotIn(b"index.json", body)
 
     def test_hidden_paths_are_not_found(self) -> None:

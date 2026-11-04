@@ -1,0 +1,7 @@
+{
+  "id": "sample-geography",
+  "title": "Sample geography",
+  "units": [
+    "places.json"
+  ]
+}

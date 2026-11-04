@@ -1,0 +1,9 @@
+{
+  "id": "sample-science",
+  "title": "Sample science",
+  "description": "Test fixture: a set made of two units.",
+  "units": [
+    "matter.json",
+    "energy.json"
+  ]
+}

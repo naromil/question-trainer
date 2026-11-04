@@ -19,7 +19,7 @@ python3 -m unittest tools.test_server.TestServer.<test_method>   # single server
 python3 tools/acceptance.py                                   # acceptance gate (see below)
 ```
 
-`test_core.js` also checks the real bank in `questions/index.json` and its set folders. `questions/` is git-ignored except `questions/README.md`, so that test needs local question data to pass.
+`test_core.js` also checks the real bank in `questions/index.json` and its set folders, and `test_server.py` checks that the bank is served. `questions/` is git-ignored except `questions/README.md`, so when it holds no `index.json` both fall back to the tracked fixture bank in `tools/fixture-bank/` (same layout: two sets, one of them multi-unit). `tools/acceptance.py` always reads the real `questions/` bank and needs local data.
 
 ## Architecture
 

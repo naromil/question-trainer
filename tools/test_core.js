@@ -2,7 +2,8 @@
  * Copyright (c) 2026 naromil
  *
  * Node test suite for app/core.js and the sample bank in questions/index.json
- * plus the per-set files it lists.
+ * plus the per-set files it lists. questions/ is git-ignored, so a fresh clone
+ * without local data checks the tracked fixture bank in tools/fixture-bank/.
  * Run: node --test tools/test_core.js
  */
 'use strict';
@@ -16,6 +17,10 @@ const { spawnSync } = require('node:child_process');
 const C = require('../app/core.js');
 
 const DAY = C.DAY_MS;
+/* The local bank when there is one, else the tracked fixture with its shape. */
+const BANK_ROOT = fs.existsSync(path.join(__dirname, '..', 'questions', 'index.json'))
+  ? path.join(__dirname, '..', 'questions')
+  : path.join(__dirname, 'fixture-bank');
 const NOW = Date.UTC(2026, 8, 29, 12, 0, 0);
 
 function question(overrides) {
@@ -305,7 +310,7 @@ test('normalizeFolder: validates the set directory index', () => {
 });
 
 test('questions/index.json and its set folders are valid fixed-format data', () => {
-  const root = path.join(__dirname, '..', 'questions');
+  const root = BANK_ROOT;
   const index = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8'));
   assert.ok(Array.isArray(index.sets));
   assert.ok(index.sets.length >= 2);
@@ -350,7 +355,7 @@ test('questions/index.json and its set folders are valid fixed-format data', () 
 });
 
 test('questions in the bank do not give the answer away by its length', () => {
-  const root = path.join(__dirname, '..', 'questions');
+  const root = BANK_ROOT;
   const index = JSON.parse(fs.readFileSync(path.join(root, 'index.json'), 'utf8'));
   let total = 0;
   let longest = 0;

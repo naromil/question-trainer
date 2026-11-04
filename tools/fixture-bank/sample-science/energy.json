@@ -1,0 +1,78 @@
+{
+  "id": "energy",
+  "title": "Energy",
+  "questions": [
+    {
+      "id": "e1",
+      "question": "What is the SI unit of energy?",
+      "choices": [
+        "Watt",
+        "Joule",
+        "Newton",
+        "Pascal"
+      ],
+      "answer": 1,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "e2",
+      "question": "Plants turn light into chemical energy by\u2026",
+      "choices": [
+        "Respiration",
+        "Osmosis",
+        "Photosynthesis",
+        "Diffusion"
+      ],
+      "answer": 2,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "e3",
+      "question": "What is the SI unit of power?",
+      "choices": [
+        "Watt",
+        "Volt",
+        "Ohm",
+        "Joule"
+      ],
+      "answer": 0,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "e4",
+      "question": "Which is a renewable source?",
+      "choices": [
+        "Coal",
+        "Oil",
+        "Natural gas",
+        "Wind"
+      ],
+      "answer": 3,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "e5",
+      "question": "Energy of motion is called\u2026",
+      "choices": [
+        "Potential",
+        "Kinetic",
+        "Thermal",
+        "Nuclear"
+      ],
+      "answer": 1,
+      "explanation": "Fixture explanation."
+    },
+    {
+      "id": "e6",
+      "question": "Which travels fastest?",
+      "choices": [
+        "Sound",
+        "Light",
+        "A jet",
+        "A bullet"
+      ],
+      "answer": 1,
+      "explanation": "Fixture explanation."
+    }
+  ]
+}
