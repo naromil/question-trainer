@@ -1745,6 +1745,10 @@
               (run >= 2 ? '' : ' hidden') + ' title="Correct answers in a row in this set">' +
               '🔥 <b id="streak-value">' + run + '</b></span>' +
             '<span class="pill timer-pill" id="timer">0:00</span>' +
+            '<span class="pill sound-pill" id="sound-pill"' +
+              (state.settings.sound ? ' hidden' : '') +
+              ' title="Answer sounds are off. Press M to turn them back on.">Muted</span>' +
+            '<span class="sr-only" id="sound-status" aria-live="polite"></span>' +
             '<button type="button" class="btn btn-ghost btn-sm" id="end-session"' +
               ' title="Stop here and see the results for the questions answered so far">' +
               'End session</button>' +
@@ -2665,7 +2669,10 @@
       '<p class="muted small">Back it up as JSON if you switch machines or clear site ' +
         'data. Archived sets are included in the export.</p>' +
       '<div class="row"><button type="button" class="btn" id="export">Export JSON</button>' +
-        '<button type="button" class="btn" id="import-btn">Import JSON</button>' +
+        '<button type="button" class="btn" id="import-btn" title="Merge a progress ' +
+          'export into the progress here">Import JSON</button>' +
+        '<button type="button" class="btn" id="replace-btn" title="Overwrite the ' +
+          'progress here with a progress export">Replace from JSON</button>' +
         '<button type="button" class="btn btn-danger" id="reset">Reset all data</button>' +
         '<input type="file" id="import-file" accept="application/json" hidden></div>' +
       '<p class="small muted" id="note" role="status" style="margin-top:.7rem"></p>' +
@@ -2707,7 +2714,15 @@
       link.click();
       URL.revokeObjectURL(link.href);
     });
+    /* Import merges the file into this browser's progress; Replace overwrites
+     * it. Both read the same hidden file input. */
+    var importMode = 'merge';
     $('#import-btn').addEventListener('click', function () {
+      importMode = 'merge';
+      $('#import-file').click();
+    });
+    $('#replace-btn').addEventListener('click', function () {
+      importMode = 'replace';
       $('#import-file').click();
     });
     $('#import-file').addEventListener('change', function (event) {
@@ -2723,21 +2738,29 @@
           note.textContent = result.message;
           return;
         }
-        if (!window.confirm('Replace your current progress (' +
+        var merge = importMode === 'merge';
+        var question = merge
+          ? 'Merge the progress in "' + file.name + '" (' +
+            summaryText(C.progressSummary(result.state)) + ') into your current progress (' +
+            summaryText(C.progressSummary(state)) + ')? Each question keeps its most ' +
+            'recent record, counters keep the larger value, and your settings and ' +
+            'archived copies here stay as they are.'
+          : 'Replace your current progress (' +
             summaryText(C.progressSummary(state)) + ') with the progress in "' + file.name +
             '" (' + summaryText(C.progressSummary(result.state)) + ')? ' +
-            'Everything here now is overwritten; export it first to keep a copy.')) {
+            'Everything here now is overwritten; export it first to keep a copy.';
+        if (!window.confirm(question)) {
           note.textContent = 'Import cancelled. Your progress is unchanged.';
           return;
         }
-        state = result.state;
+        state = merge ? C.mergeImported(state, result.state, Date.now()) : result.state;
         var saved = saveState();
         applyTheme();
         renderPills();
         /* The controls above show the old settings; repaint them from the
          * imported ones, then report on the fresh page. */
         renderSettings(route);
-        document.getElementById('note').textContent = 'Imported: ' +
+        document.getElementById('note').textContent = (merge ? 'Merged: ' : 'Imported: ') +
           summaryText(C.progressSummary(state)) + '.' +
           (saved ? '' : ' The browser could not save it (storage is full).');
       }, function (err) {
@@ -2943,6 +2966,23 @@
     openShortcuts(document.activeElement);
   });
 
+  /* `/` jumps to the filter box on Sets and Browse, the usual search
+   * shortcut. Like `?` it never fires while typing, editing or in a dialog. */
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
+    var target = event.target || {};
+    var tag = (target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' ||
+        target.isContentEditable) return;
+    if (document.querySelector('dialog[open]')) return;
+    var input = document.getElementById('set-filter') ||
+      document.getElementById('browse-filter');
+    if (!input) return;
+    event.preventDefault();
+    input.focus();
+    input.select();
+  });
+
   /* ------------------------------------------------------------ keyboard */
   /* In the browser, ← → and J K step through the filtered list. */
   document.addEventListener('keydown', function (event) {
@@ -2998,6 +3038,19 @@
     if (number >= 0) return number;
     var digit = /^(?:Digit|Numpad)([1-9])$/.exec(event.code || '');
     return digit && event.shiftKey ? parseInt(digit[1], 10) - 1 : -1;
+  }
+
+  /* M flips the answer-sound setting without leaving the session. It is the
+   * same saved setting as the Settings switch; switching it on chimes once,
+   * like that switch, and the Muted pill shows while it is off. */
+  function toggleSound() {
+    state.settings.sound = !state.settings.sound;
+    saveState();
+    var pill = document.getElementById('sound-pill');
+    if (pill) pill.hidden = state.settings.sound;
+    var status = document.getElementById('sound-status');
+    if (status) status.textContent = state.settings.sound ? 'Sound on' : 'Sound off';
+    if (state.settings.sound) playVerdict({ correct: true, coin: 'new', streak: 0 });
   }
 
   function focusQuestionOrMain() {
@@ -3065,7 +3118,16 @@
     }
 
     var index = choiceKeyIndex(event);
-    if (index >= 0 && index < C.choicesFor(session.questions[session.index]).length) {
+    var count = C.choicesFor(session.questions[session.index]).length;
+    /* M toggles sound, unless this question has a choice M (13+ choices),
+     * where the letter keeps choosing. */
+    if ((event.key === 'm' || event.key === 'M') && !event.shiftKey && index >= count) {
+      if (event.repeat) return;
+      event.preventDefault();
+      toggleSound();
+      return;
+    }
+    if (index >= 0 && index < count) {
       event.preventDefault();
       if (event.shiftKey) {
         toggleExcluded(index);

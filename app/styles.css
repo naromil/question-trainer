@@ -691,6 +691,45 @@ kbd {
 .burst .spark-1 { background: var(--blue); border-radius: 50%; }
 .burst .spark-2 { background: var(--amber); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
 
+/* Forced colors (Windows high contrast) replace every colour with system
+   colours and drop backgrounds and shadows, so the choice states fall back
+   to border weight and style, system highlight colours and the tick/cross
+   badges: selected = Highlight, right = thick solid border, wrong = thick
+   dashed border, crossed out = GrayText with the strike-through kept. */
+@media (forced-colors: active) {
+  .choice-row { border-color: CanvasText; }
+  .choice-row.live:hover { border-color: Highlight; }
+  .choice-row.selected { border: 3px solid Highlight; }
+  .choice-row.selected .letter {
+    forced-color-adjust: none;
+    border-color: Highlight; background: Highlight; color: HighlightText;
+  }
+  .choice-row.is-correct { border: 3px solid CanvasText; }
+  .choice-row.is-wrong { border: 3px dashed CanvasText; }
+  .choice-row.is-correct .letter,
+  .choice-row.is-wrong .letter,
+  .choice-row.is-correct .choice-flag,
+  .choice-row.is-wrong .choice-flag {
+    forced-color-adjust: none;
+    border-color: CanvasText; background: CanvasText; color: Canvas;
+  }
+  /* Graded choices are disabled buttons, which forced colors paint GrayText;
+     the right and the picked row stay full-contrast. */
+  .choice-row.is-correct .choice,
+  .choice-row.is-wrong .choice { color: CanvasText; }
+  .choice-row.dimmed { opacity: 1; }
+  .choice-row.dimmed .choice-text,
+  .choice-row.dimmed .letter { color: GrayText; border-color: GrayText; }
+  /* After grading a crossed-out row keeps its right/wrong border and badge. */
+  .choice-row.live.is-excluded { border-style: dotted; border-color: GrayText; }
+  .choice-row.is-excluded .choice-text,
+  .choice-row.live.is-excluded .letter { color: GrayText; border-color: GrayText; }
+  .elim:hover:not(:disabled) { color: Highlight; border-color: Highlight; }
+  .elim[aria-pressed="true"] { color: Highlight; border: 2px solid Highlight; }
+  .elim[aria-pressed="true"] span::after { forced-color-adjust: none; background: Highlight; }
+  .elim:disabled { opacity: 1; color: GrayText; border-color: GrayText; }
+}
+
 /* One rule catches every present and future effect: no movement, no fades,
    no staggered delays. The spark layer is removed outright. */
 @media (prefers-reduced-motion: reduce) {
@@ -998,6 +1037,7 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .mastery-pill { order: 1; }
   .streak-chip { order: 2; }
   .timer-pill { order: 3; }
+  .sound-pill { order: 3; }
   #end-session { order: 4; }
   .q-delete kbd { display: none; }
   .results-head { flex-wrap: wrap; }

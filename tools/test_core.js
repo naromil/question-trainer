@@ -2040,3 +2040,30 @@ test('calendarDaysBetween: counts local calendar days, not 24-hour blocks', () =
   assert.equal(C.calendarDaysBetween(new Date(2026, 2, 1, 12).getTime(),
     new Date(2026, 3, 1, 12).getTime()), 31, 'across a DST change');
 });
+
+test('mergeImported: an import merges into the current progress, which keeps its settings', () => {
+  const set = loadSet(rawSet({ questions: [question({ id: 'q1' }), question({ id: 'q2' })] }));
+  const current = C.emptyState(NOW);
+  const imported = C.emptyState(NOW);
+  const [q1, q2] = C.questionsOf(set);
+
+  current.settings = { length: 20, practiceAll: false, theme: 'dark', sound: false };
+  imported.settings = { length: 5, practiceAll: true, theme: 'light', sound: true };
+  C.applyAnswer(current, set.id, q1, q1.answer, NOW);
+  C.applyAnswer(imported, set.id, q1, (q1.answer + 1) % q1.choices.length, NOW + DAY);
+  C.applyAnswer(imported, set.id, q2, q2.answer, NOW + DAY);
+  imported.archived['old-set'] = Object.assign(C.cloneSet(set), { id: 'old-set', archivedAt: NOW });
+
+  const currentBefore = clone(current);
+  const importedBefore = clone(imported);
+  const merged = C.mergeImported(current, imported, NOW + 2 * DAY);
+
+  assert.deepEqual(merged.settings, current.settings, 'settings here win over the file');
+  const r1 = merged.q[C.questionKey(set.id, q1.id)];
+  assert.equal(r1.last, NOW + DAY, 'the more recent record for a shared question wins');
+  assert.ok(merged.q[C.questionKey(set.id, q2.id)], 'a question only in the file comes along');
+  assert.ok(merged.archived['old-set'], 'an archived copy only in the file comes along');
+  assert.equal(merged.totals.a, 2, 'counters keep the larger side, not the sum');
+  assert.deepEqual(current, currentBefore, 'the current state is not mutated');
+  assert.deepEqual(imported, importedBefore, 'the imported state is not mutated');
+});

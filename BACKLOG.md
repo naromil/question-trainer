@@ -7,12 +7,12 @@
 - [x] Show when the next review falls due on the "Nothing is due for review" screen — its copy says "within a day or two", which is wrong since never-missed questions wait 14+ days.
 - [x] Run the bank-shape and serving tests against a tracked fixture when `questions/` is absent — a fresh clone fails `test_core.js` and `test_server.py` only for lack of local data.
 - [ ] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
-- [ ] Press <kbd>/</kbd> to focus the filter box on Sets and Browse — the usual search shortcut; the filters are mouse/Tab-only today.
-- [ ] Forced-colors (Windows high contrast) styles for selected, crossed-out, right and wrong choices — those states rely on colour and opacity that forced-colors mode strips.
-- [ ] <kbd>M</kbd> toggles answer sounds during a session — muting today means leaving the session for Settings.
+- [x] Press <kbd>/</kbd> to focus the filter box on Sets and Browse — the usual search shortcut; the filters are mouse/Tab-only today.
+- [x] Forced-colors (Windows high contrast) styles for selected, crossed-out, right and wrong choices — those states rely on colour and opacity that forced-colors mode strips.
+- [x] <kbd>M</kbd> toggles answer sounds during a session — muting today means leaving the session for Settings.
 - Markdown/math rendering in stems and explanations.
 - [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
-- [ ] Merge an imported progress file with the current one (via `mergeStates`) instead of replacing it — changes what Import means for existing users.
+- [x] Merge an imported progress file with the current one (via `mergeStates`) instead of replacing it — changes what Import means for existing users.
 - [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.
 
 ## Proposed (needs the owner's OK — move to Routine to approve)
