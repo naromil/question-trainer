@@ -10,20 +10,16 @@
 - [ ] Press <kbd>/</kbd> to focus the filter box on Sets and Browse — the usual search shortcut; the filters are mouse/Tab-only today.
 - [ ] Forced-colors (Windows high contrast) styles for selected, crossed-out, right and wrong choices — those states rely on colour and opacity that forced-colors mode strips.
 - [ ] <kbd>M</kbd> toggles answer sounds during a session — muting today means leaving the session for Settings.
-
+- Markdown/math rendering in stems and explanations.
+- [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
+- [ ] Merge an imported progress file with the current one (via `mergeStates`) instead of replacing it — changes what Import means for existing users.
+- [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.
 
 ## Proposed (needs the owner's OK — move to Routine to approve)
 
-- [ ] Merge an imported progress file with the current one (via `mergeStates`) instead of replacing it — changes what Import means for existing users.
-- [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
-
 ## Ideas for the owner to consider (never built automatically)
 
-- Timed exam mode: no feedback until the end, with a time limit.
-- Markdown/math rendering in stems and explanations.
 - Installable offline app (service worker / web manifest) within the strict CSP.
-- Daily goal and review reminders.
-- Personal notes attached to a question.
 
 ## Rejected (Claude won't re-propose these)
 
@@ -33,3 +29,5 @@
     - Multiple choice is enough for the purpose of reviewing.
 - In-app question-set editor or CSV import.
     - Users ask their agents to edit the question-set directly.
+- Timed exam mode: no feedback until the end, with a time limit.
+- Daily goal and review reminders.
