@@ -68,11 +68,14 @@ from disk if the browser permits reading local JSON files; most block it and the
 app names the file. In that mode the progress API is not available, so everything
 stays in `localStorage`; **Settings → Progress data** says which mode is active.
 
-**Settings → Progress data** has separate **Export JSON** and **Import JSON**
-buttons to move progress between machines or origins. An export downloads as
-`question-trainer-progress-YYYY-MM-DD.json`, dated with the local day. An import replaces the
-progress here, so it first asks for confirmation, naming what each side holds
-(answers, sessions, archived sets). A file that is not valid JSON, not a
+**Settings → Progress data** has separate **Export JSON**, **Import JSON** and
+**Replace from JSON** buttons to move progress between machines or origins. An export downloads as
+`question-trainer-progress-YYYY-MM-DD.json`, dated with the local day. **Import JSON** merges the
+file into the progress here: each question keeps its more recent record, per-set, per-day and
+total counters keep the larger value, delete/restore marks keep the later decision, and this
+browser's settings, local sets and archived copies win (archived copies only in the file are
+added). **Replace from JSON** overwrites the progress here with the file instead. Both first ask
+for confirmation, naming what each side holds (answers, sessions, archived sets). A file that is not valid JSON, not a
 progress export, or from another progress version is refused with a message and
 changes nothing; choosing the same file again after fixing it works.
 
@@ -100,7 +103,7 @@ removes the entry.
 | **Results** | **Session complete**, or **Session ended** with how many of the questions were answered when the session was stopped early. An animated score ring, mastery delta, question-by-question log, full explanations for misses, and **Retry the missed questions** (inside the same unit when the session was unit-scoped). A strong score adds confetti and a rising chord. **Practice again** starts a clean practice run for the same set or unit, dropping any retry mode or count from the URL. |
 | **Archive** | Sets and single units you archived, with their progress and a saved copy of their questions. **Restore** puts a set or unit back on the active list. If the source is no longer listed in `questions/index.json`, the saved copy is kept as a browser-local set. Deleted questions are listed below, each with **View** and **Restore**. |
 | **Progress** | Answers, first-try accuracy, questions seen, sets mastered, day streak, due count for active sets, a 14-day activity chart, a per-set table with a **Reset** action, and repeated trouble spots with a **Practice these** button per set for a focused retry. |
-| **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export/import/reset, and where progress is saved. A theme quick-toggle in the top bar cycles auto/light/dark and stays in sync with the Settings theme select. If a browser or disk write fails, a banner names the copy at risk and the **Progress data** section repeats it; the page keeps working. |
+| **Settings** | Session length (10 by default), the practice-all switch for sets of 30 or fewer questions, theme, answer sounds, export, import (merge) / replace, reset, and where progress is saved. A theme quick-toggle in the top bar cycles auto/light/dark and stays in sync with the Settings theme select. If a browser or disk write fails, a banner names the copy at risk and the **Progress data** section repeats it; the page keeps working. |
 | **Format** | The in-app schema summary with an example; the full reference is [questions/README.md](questions/README.md). |
 
 Every screen sets its own page title, such as *Practice · Biology · Cells — Question Trainer* or *Settings — Question Trainer*, so browser tabs, history and screen readers can tell them apart.

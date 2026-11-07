@@ -1868,6 +1868,15 @@
     return { ok: true, state: sanitizeState(parsed, now) };
   }
 
+  /* Import JSON merges by default: the file plays the "server" side of
+   * mergeStates() and this browser the local side, so question records keep
+   * the newer answer, counters keep the larger value, and this browser's
+   * settings, local sets and archived copies win over the file's. Archived
+   * copies only in the file come along. Neither input is mutated. */
+  function mergeImported(current, imported, now) {
+    return mergeStates(imported, current, now);
+  }
+
   /* The counts an import replaces or brings in, for the confirmation and the
    * note after it. */
   function progressSummary(state) {
@@ -1974,6 +1983,7 @@
     dueCount: dueCount,
     activeDueCount: activeDueCount,
     parseProgressImport: parseProgressImport,
+    mergeImported: mergeImported,
     progressSummary: progressSummary,
     pageTitle: pageTitle,
     exportFileName: exportFileName

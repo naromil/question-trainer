@@ -12,7 +12,7 @@
 - [x] <kbd>M</kbd> toggles answer sounds during a session — muting today means leaving the session for Settings.
 - Markdown/math rendering in stems and explanations.
 - [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
-- [ ] Merge an imported progress file with the current one (via `mergeStates`) instead of replacing it — changes what Import means for existing users.
+- [x] Merge an imported progress file with the current one (via `mergeStates`) instead of replacing it — changes what Import means for existing users.
 - [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.
 
 ## Proposed (needs the owner's OK — move to Routine to approve)
