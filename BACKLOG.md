@@ -8,7 +8,7 @@
 - [x] Run the bank-shape and serving tests against a tracked fixture when `questions/` is absent — a fresh clone fails `test_core.js` and `test_server.py` only for lack of local data.
 - [ ] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
 - [x] Press <kbd>/</kbd> to focus the filter box on Sets and Browse — the usual search shortcut; the filters are mouse/Tab-only today.
-- [ ] Forced-colors (Windows high contrast) styles for selected, crossed-out, right and wrong choices — those states rely on colour and opacity that forced-colors mode strips.
+- [x] Forced-colors (Windows high contrast) styles for selected, crossed-out, right and wrong choices — those states rely on colour and opacity that forced-colors mode strips.
 - [ ] <kbd>M</kbd> toggles answer sounds during a session — muting today means leaving the session for Settings.
 - Markdown/math rendering in stems and explanations.
 - [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
