@@ -1037,6 +1037,7 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .mastery-pill { order: 1; }
   .streak-chip { order: 2; }
   .timer-pill { order: 3; }
+  .sound-pill { order: 3; }
   #end-session { order: 4; }
   .q-delete kbd { display: none; }
   .results-head { flex-wrap: wrap; }

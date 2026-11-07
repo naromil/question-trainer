@@ -1745,6 +1745,10 @@
               (run >= 2 ? '' : ' hidden') + ' title="Correct answers in a row in this set">' +
               '🔥 <b id="streak-value">' + run + '</b></span>' +
             '<span class="pill timer-pill" id="timer">0:00</span>' +
+            '<span class="pill sound-pill" id="sound-pill"' +
+              (state.settings.sound ? ' hidden' : '') +
+              ' title="Answer sounds are off. Press M to turn them back on.">Muted</span>' +
+            '<span class="sr-only" id="sound-status" aria-live="polite"></span>' +
             '<button type="button" class="btn btn-ghost btn-sm" id="end-session"' +
               ' title="Stop here and see the results for the questions answered so far">' +
               'End session</button>' +
@@ -3017,6 +3021,19 @@
     return digit && event.shiftKey ? parseInt(digit[1], 10) - 1 : -1;
   }
 
+  /* M flips the answer-sound setting without leaving the session. It is the
+   * same saved setting as the Settings switch; switching it on chimes once,
+   * like that switch, and the Muted pill shows while it is off. */
+  function toggleSound() {
+    state.settings.sound = !state.settings.sound;
+    saveState();
+    var pill = document.getElementById('sound-pill');
+    if (pill) pill.hidden = state.settings.sound;
+    var status = document.getElementById('sound-status');
+    if (status) status.textContent = state.settings.sound ? 'Sound on' : 'Sound off';
+    if (state.settings.sound) playVerdict({ correct: true, coin: 'new', streak: 0 });
+  }
+
   function focusQuestionOrMain() {
     var stem = document.querySelector('#qcard .stem');
     if (stem) { stem.focus({ preventScroll: true }); return; }
@@ -3082,7 +3099,16 @@
     }
 
     var index = choiceKeyIndex(event);
-    if (index >= 0 && index < C.choicesFor(session.questions[session.index]).length) {
+    var count = C.choicesFor(session.questions[session.index]).length;
+    /* M toggles sound, unless this question has a choice M (13+ choices),
+     * where the letter keeps choosing. */
+    if ((event.key === 'm' || event.key === 'M') && !event.shiftKey && index >= count) {
+      if (event.repeat) return;
+      event.preventDefault();
+      toggleSound();
+      return;
+    }
+    if (index >= 0 && index < count) {
       event.preventDefault();
       if (event.shiftKey) {
         toggleExcluded(index);
