@@ -2943,6 +2943,23 @@
     openShortcuts(document.activeElement);
   });
 
+  /* `/` jumps to the filter box on Sets and Browse, the usual search
+   * shortcut. Like `?` it never fires while typing, editing or in a dialog. */
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
+    var target = event.target || {};
+    var tag = (target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' ||
+        target.isContentEditable) return;
+    if (document.querySelector('dialog[open]')) return;
+    var input = document.getElementById('set-filter') ||
+      document.getElementById('browse-filter');
+    if (!input) return;
+    event.preventDefault();
+    input.focus();
+    input.select();
+  });
+
   /* ------------------------------------------------------------ keyboard */
   /* In the browser, ← → and J K step through the filtered list. */
   document.addEventListener('keydown', function (event) {
