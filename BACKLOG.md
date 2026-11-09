@@ -2,24 +2,19 @@
 
 ## Routine (Claude may build these without asking)
 
-- [x] fix: wrong padding for "All sets are archived": <img width="1016" height="705" alt="image" src="https://github.com/user-attachments/assets/8d273f15-d1a6-46ee-bc6c-e56910ebacba" />
-- [x] Undo button on the "Question deleted" note in a session — the Delete key is easy to hit by accident and recovery today means a trip to the Archive.
-- [x] Show when the next review falls due on the "Nothing is due for review" screen — its copy says "within a day or two", which is wrong since never-missed questions wait 14+ days.
-- [x] Run the bank-shape and serving tests against a tracked fixture when `questions/` is absent — a fresh clone fails `test_core.js` and `test_server.py` only for lack of local data.
 - [ ] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
-- [x] Press <kbd>/</kbd> to focus the filter box on Sets and Browse — the usual search shortcut; the filters are mouse/Tab-only today.
-- [x] Forced-colors (Windows high contrast) styles for selected, crossed-out, right and wrong choices — those states rely on colour and opacity that forced-colors mode strips.
-- [x] <kbd>M</kbd> toggles answer sounds during a session — muting today means leaving the session for Settings.
 - Markdown/math rendering in stems and explanations.
 - [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
-- [x] Merge an imported progress file with the current one (via `mergeStates`) instead of replacing it — changes what Import means for existing users.
 - [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.
+- [ ] Keyboard shortcuts on the Results screen (<kbd>R</kbd> retry the missed questions, <kbd>P</kbd> practice again) and list them in the <kbd>?</kbd> dialog — a keyboard-only session ends on a screen whose actions are mouse/Tab-only.
+- [ ] Test that `serve.py` exits after `--idle-timeout` with no requests and stays up while requests arrive — the idle watchdog has no test in `test_server.py` or the acceptance gate.
 
 ## Proposed (needs the owner's OK — move to Routine to approve)
 
 ## Ideas for the owner to consider (never built automatically)
 
 - Installable offline app (service worker / web manifest) within the strict CSP.
+- Review everything due across all sets in one session — reverses the deliberate "no mixed practice" design, so it is the owner's call.
 
 ## Rejected (Claude won't re-propose these)
 
