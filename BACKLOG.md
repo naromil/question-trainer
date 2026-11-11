@@ -2,7 +2,7 @@
 
 ## Routine (Claude may build these without asking)
 
-- [ ] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
+- [x] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
 - Markdown/math rendering in stems and explanations.
 - [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
 - [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.

@@ -2067,3 +2067,83 @@ test('mergeImported: an import merges into the current progress, which keeps its
   assert.deepEqual(current, currentBefore, 'the current state is not mutated');
   assert.deepEqual(imported, importedBefore, 'the imported state is not mutated');
 });
+
+test('shuffleOrder: a permutation that never keeps the authored order', () => {
+  for (let count = 2; count <= 6; count++) {
+    for (const r of [0, 0.3, 0.999]) {
+      const order = C.shuffleOrder(count, () => r);
+      assert.deepEqual(order.slice().sort((a, b) => a - b), [...Array(count).keys()]);
+      assert.notDeepEqual(order, [...Array(count).keys()], `count ${count}, rng ${r}`);
+    }
+  }
+  assert.deepEqual(C.shuffleOrder(1, () => 0.5), [0]);
+});
+
+test('withChoiceOrder: choices, explanations and answer follow the order', () => {
+  const base = question({
+    choices: ['Alpha', 'Bravo', 'Charlie', 'Delta'],
+    answer: 1,
+    explanations: ['a', 'b', 'c', 'd']
+  });
+  const shown = C.withChoiceOrder(base, [2, 1, 3, 0]);
+  assert.equal(shown.id, base.id);
+  assert.deepEqual(shown.choices, ['Charlie', 'Bravo', 'Delta', 'Alpha']);
+  assert.deepEqual(shown.explanations, ['c', 'b', 'd', 'a']);
+  assert.equal(shown.answer, 1);
+  assert.equal(C.originalQuestion(shown), base);
+  assert.deepEqual(base.choices, ['Alpha', 'Bravo', 'Charlie', 'Delta'], 'source untouched');
+  assert.equal(C.choicesFor(shown)[4], C.DONT_KNOW_CHOICE, "I don't know stays last");
+
+  const moved = C.withChoiceOrder(base, [1, 0, 2, 3]);
+  assert.equal(moved.answer, 0);
+  const state = C.emptyState(NOW);
+  assert.equal(C.applyAnswer(state, 'set-1', moved, 0, NOW).correct, true);
+  assert.equal(C.applyAnswer(state, 'set-1', moved, 1, NOW).correct, false);
+  assert.ok(state.q[C.questionKey('set-1', base.id)], 'progress keyed by the same id');
+});
+
+test('setSessionShuffle: only unanswered questions change, and it round-trips', () => {
+  const { set, session } = sessionFixture();
+  const answered = session.questions[0];
+  session.selected = 2;
+  session.excluded = { 1: true };
+  C.setSessionShuffle(session, true, () => 0);
+  assert.equal(session.shuffle, true);
+  assert.equal(session.questions[0], answered, 'an answered question keeps its order');
+  assert.ok(session.questions[1].order, 'the question on screen is shuffled');
+  assert.equal(session.selected, null);
+  assert.deepEqual(session.excluded, {});
+
+  const snapshot = C.makeSessionSnapshot(session, 100);
+  assert.equal(snapshot.shuffle, true);
+  assert.equal(snapshot.orders[0], null);
+  assert.deepEqual(snapshot.orders[1], session.questions[1].order);
+  const restored = C.restoreSessionSnapshot(clone(snapshot), set);
+  assert.ok(restored);
+  assert.equal(restored.shuffle, true);
+  assert.deepEqual(restored.questions[1].choices, session.questions[1].choices);
+  assert.equal(restored.questions[1].answer, session.questions[1].answer);
+
+  const bad = (mutate) => {
+    const copy = clone(snapshot);
+    mutate(copy);
+    return C.restoreSessionSnapshot(copy, set);
+  };
+  assert.equal(bad((c) => { c.orders[1] = [0, 0, 1, 2]; }), null, 'not a permutation');
+  assert.equal(bad((c) => { c.orders[1] = [0, 1]; }), null, 'wrong length');
+  assert.equal(bad((c) => { c.orders = [null]; }), null, 'orders out of step with ids');
+  assert.equal(bad((c) => { c.shuffle = 'yes'; }), null);
+  const legacy = bad((c) => { delete c.orders; delete c.shuffle; });
+  assert.ok(legacy, 'a snapshot from before the shuffle still restores');
+  assert.equal(legacy.shuffle, false);
+
+  C.setSessionShuffle(session, false);
+  assert.equal(session.shuffle, false);
+  assert.equal(session.questions[1].order, undefined, 'turning it off restores authored order');
+
+  session.index = 1;
+  session.checked = true;
+  const graded = session.questions[1];
+  C.setSessionShuffle(session, true, () => 0);
+  assert.equal(session.questions[1], graded, 'a checked question is left as graded');
+});

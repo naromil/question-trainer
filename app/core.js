@@ -1036,6 +1036,86 @@
     return decorate(pool, state, setId, rng).slice(0, limit);
   }
 
+  /* Optional per-session shuffle of choice order. A shuffled question is a
+   * display copy: its choices and per-choice explanations follow `order`
+   * (order[shown] = authored index) and `answer` is remapped, so grading,
+   * letter shortcuts and cross-outs all work in the order shown. The copy
+   * keeps the same id, so progress is unaffected, and `original` points back
+   * at the authored question. "I don't know" is appended after the shuffled
+   * choices, so it always stays last. */
+  function isChoiceOrder(order, count) {
+    if (!Array.isArray(order) || order.length !== count) return false;
+    var seen = {};
+    for (var i = 0; i < order.length; i++) {
+      var n = order[i];
+      if (!finiteNumber(n) || Math.floor(n) !== n || n < 0 || n >= count || seen[n]) {
+        return false;
+      }
+      seen[n] = true;
+    }
+    return true;
+  }
+
+  /* A random permutation of 0..count-1. With two or more choices it never
+   * returns the authored order, so turning shuffle on always shows a change. */
+  function shuffleOrder(count, rng) {
+    rng = rng || Math.random;
+    var order = [];
+    for (var i = 0; i < count; i++) order.push(i);
+    for (var j = count - 1; j > 0; j--) {
+      var k = Math.floor(rng() * (j + 1));
+      if (k > j) k = j;
+      var tmp = order[j];
+      order[j] = order[k];
+      order[k] = tmp;
+    }
+    var identity = true;
+    for (var m = 0; m < count; m++) {
+      if (order[m] !== m) { identity = false; break; }
+    }
+    if (identity && count > 1) {
+      order.push(order.shift());
+    }
+    return order;
+  }
+
+  function originalQuestion(question) {
+    return question && question.original ? question.original : question;
+  }
+
+  function withChoiceOrder(question, order) {
+    var base = originalQuestion(question);
+    var copy = cloneQuestion(base);
+    copy.choices = order.map(function (i) { return base.choices[i]; });
+    copy.explanations = base.explanations
+      ? order.map(function (i) { return base.explanations[i]; })
+      : null;
+    copy.answer = order.indexOf(base.answer);
+    copy.order = order.slice();
+    copy.original = base;
+    return copy;
+  }
+
+  /* Turn the shuffle on or off for the rest of a session. Questions already
+   * answered keep the order they were answered in; the question on screen
+   * changes only while it is still unchecked, and its selection and
+   * cross-outs are dropped because they named choices by position. */
+  function setSessionShuffle(session, on, rng) {
+    session.shuffle = !!on;
+    var start = session.checked ? session.index + 1 : session.index;
+    for (var i = start; i < session.questions.length; i++) {
+      var base = originalQuestion(session.questions[i]);
+      session.questions[i] = on
+        ? withChoiceOrder(base, shuffleOrder(base.choices.length, rng))
+        : base;
+    }
+    if (!session.checked && session.index < session.questions.length) {
+      session.selected = null;
+      session.excluded = {};
+    }
+    return session;
+  }
+
   /* The disposable sessionStorage payload for a running session. Results carry
    * the reward as it was at answer time, because mastery may have moved on
    * since then. `elapsed` is passed in so the caller keeps owning the clock. */
@@ -1055,6 +1135,10 @@
         length: session.cfg.length
       },
       ids: session.questions.map(function (question) { return question.id; }),
+      shuffle: !!session.shuffle,
+      orders: session.questions.map(function (question) {
+        return question.order ? question.order.slice() : null;
+      }),
       index: session.index,
       results: session.results.map(function (record) {
         return {
@@ -1188,7 +1272,10 @@
       finiteNumber(raw.elapsed) && raw.elapsed >= 0 &&
       (raw.selected == null || (finiteNumber(raw.selected) &&
         Math.floor(raw.selected) === raw.selected && raw.selected >= 0)) &&
-      Array.isArray(raw.excluded);
+      Array.isArray(raw.excluded) &&
+      (raw.shuffle == null || typeof raw.shuffle === 'boolean') &&
+      (raw.orders == null ||
+        (Array.isArray(raw.orders) && raw.orders.length === raw.ids.length));
     if (!valid) return null;
 
     var unitId = cfg.unitId || '';
@@ -1204,7 +1291,13 @@
       var id = raw.ids[i];
       if (typeof id !== 'string' || !byId[id] || seen[id]) return null;
       seen[id] = true;
-      questions.push(byId[id]);
+      var order = raw.orders ? raw.orders[i] : null;
+      if (order == null) {
+        questions.push(byId[id]);
+        continue;
+      }
+      if (!isChoiceOrder(order, byId[id].choices.length)) return null;
+      questions.push(withChoiceOrder(byId[id], order));
     }
 
     var results = [];
@@ -1272,6 +1365,7 @@
       selected: selected,
       excluded: excluded,
       checked: raw.checked,
+      shuffle: raw.shuffle === true,
       elapsed: raw.elapsed,
       runningSince: null
     };
@@ -1948,6 +2042,10 @@
     nextDueAt: nextDueAt,
     calendarDaysBetween: calendarDaysBetween,
     selectSession: selectSession,
+    shuffleOrder: shuffleOrder,
+    withChoiceOrder: withChoiceOrder,
+    originalQuestion: originalQuestion,
+    setSessionShuffle: setSessionShuffle,
     makeSessionSnapshot: makeSessionSnapshot,
     endSession: endSession,
     removeCurrentQuestion: removeCurrentQuestion,

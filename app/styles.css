@@ -225,6 +225,7 @@ kbd {
 .btn-danger:hover { background: var(--red-soft); border-color: var(--red); }
 .btn-ghost { border-color: transparent; color: var(--blue); padding: .4rem .6rem; }
 .btn-ghost:hover { background: var(--card-2); }
+#shuffle-toggle[aria-pressed="true"] { background: var(--card-2); font-weight: 600; }
 .btn-ghost.is-danger { color: var(--ink-3); }
 .btn-ghost.is-danger:hover, .btn-ghost.is-danger:focus-visible {
   color: var(--red); background: var(--red-soft);
@@ -1039,6 +1040,7 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
   .timer-pill { order: 3; }
   .sound-pill { order: 3; }
   #end-session { order: 4; }
+  #shuffle-toggle { order: 4; }
   .q-delete kbd { display: none; }
   .results-head { flex-wrap: wrap; }
   .score-ring { width: 92px; height: 92px; }

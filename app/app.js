@@ -1598,7 +1598,8 @@
   function createSession(cfg, preselect) {
     var set = C.findSet(state, SOURCE_SETS, cfg.setId);
     if (!set) return null;
-    var questions = preselect || C.selectSession(state, set.id, C.questionsOf(set, cfg.unitId), {
+    /* A retry starts from the authored questions: the shuffle is per session. */
+    var questions = preselect ? preselect.map(C.originalQuestion) : C.selectSession(state, set.id, C.questionsOf(set, cfg.unitId), {
       mode: cfg.mode === 'review' ? 'review' : 'practice',
       length: cfg.length,
       now: Date.now()
@@ -1612,6 +1613,7 @@
       selected: null,
       excluded: {},
       checked: false,
+      shuffle: false,
       elapsed: 0,
       runningSince: null
     };
@@ -1749,6 +1751,10 @@
               (state.settings.sound ? ' hidden' : '') +
               ' title="Answer sounds are off. Press M to turn them back on.">Muted</span>' +
             '<span class="sr-only" id="sound-status" aria-live="polite"></span>' +
+            '<button type="button" class="btn btn-ghost btn-sm" id="shuffle-toggle"' +
+              ' aria-pressed="' + (session.shuffle ? 'true' : 'false') + '"' +
+              ' title="Show the choices of the questions still to answer in a random ' +
+              'order, for this session only">' + shuffleLabel() + '</button>' +
             '<button type="button" class="btn btn-ghost btn-sm" id="end-session"' +
               ' title="Stop here and see the results for the questions answered so far">' +
               'End session</button>' +
@@ -1765,7 +1771,27 @@
     var keep = session.index > 0 || session.checked || session.selected != null ||
       Object.keys(session.excluded).length > 0 || session.results.length > 0;
     document.getElementById('end-session').addEventListener('click', endSessionEarly);
+    document.getElementById('shuffle-toggle').addEventListener('click', toggleShuffle);
     showQuestion(session.index, keep);
+  }
+
+  function shuffleLabel() {
+    return 'Shuffle choices: ' + (session && session.shuffle ? 'on' : 'off');
+  }
+
+  /* Per-session choice shuffle. It applies to the question on screen while it
+   * is unanswered and to every later one; answered questions keep the order
+   * they were answered in. The next session starts in authored order. */
+  function toggleShuffle() {
+    if (!session || session.index >= session.questions.length) return;
+    C.setSessionShuffle(session, !session.shuffle, Math.random);
+    persistSession();
+    var button = document.getElementById('shuffle-toggle');
+    if (button) {
+      button.setAttribute('aria-pressed', String(!!session.shuffle));
+      button.textContent = shuffleLabel();
+    }
+    if (!session.checked) showQuestion(session.index, true);
   }
 
   /* Stop before the last question. With answers to show this is the results
