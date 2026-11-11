@@ -795,6 +795,7 @@ pre.code {
 .q-delete:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; color: var(--red); }
 .actions { display: flex; gap: .6rem; align-items: center; margin-top: 1rem; }
 .kbdhint { color: var(--ink-3); font-size: .78rem; margin-left: auto; text-align: right; }
+.btn-kbd { font-size: .72em; margin-left: .35em; }
 .shortcut-help {
   flex: none; width: 1.7rem; height: 1.7rem; padding: 0;
   display: inline-grid; place-items: center;
@@ -1045,6 +1046,7 @@ a.search-hit { text-decoration: none; }
   #end-session { order: 4; }
   #shuffle-toggle { order: 4; }
   .q-delete kbd { display: none; }
+  .btn-kbd { display: none; }
   .results-head { flex-wrap: wrap; }
   .score-ring { width: 92px; height: 92px; }
   .score-inner b { font-size: 1.25rem; }

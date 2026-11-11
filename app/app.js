@@ -2464,9 +2464,11 @@
           (delta > 0 ? '+' : '') + delta + '</b><span>mastery this session</span></div>' +
       '</div>' +
       '<div class="row" style="margin-top:.9rem">' +
-        (missed.length ? '<button class="btn btn-primary" id="retry">Retry the ' +
-          plural(missed.length, 'missed question') + '</button>' : '') +
-        '<button type="button" class="btn" id="again">Practice again</button>' +
+        (missed.length ? '<button class="btn btn-primary" id="retry" aria-keyshortcuts="R">' +
+          'Retry the ' + plural(missed.length, 'missed question') +
+          ' <kbd class="btn-kbd" aria-hidden="true">R</kbd></button>' : '') +
+        '<button type="button" class="btn" id="again" aria-keyshortcuts="P">Practice again' +
+          ' <kbd class="btn-kbd" aria-hidden="true">P</kbd></button>' +
         '<a class="btn btn-ghost" href="#/">Back to sets</a>' +
       '</div>' +
       (deltas ? '<div class="row" style="margin-top:.7rem">' +
@@ -3080,6 +3082,27 @@
       if (main) main.focus();
     });
   })();
+
+  /* The Results screen: R retries the missed questions and P practises again,
+   * the same as their buttons, so a keyboard-only session does not end on a
+   * screen reachable only by mouse or Tab. Like the other shortcuts they never
+   * fire while typing, with a modifier, in a dialog or on key repeat. */
+  document.addEventListener('keydown', function (event) {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+    var key = (event.key || '').toLowerCase();
+    if (key !== 'r' && key !== 'p') return;
+    if (parseHash().path !== '/practice' || !session ||
+        session.index < session.questions.length) return;
+    if (document.querySelector('dialog[open]')) return;
+    var target = event.target || {};
+    var tag = (target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea' ||
+        target.isContentEditable) return;
+    var button = document.getElementById(key === 'r' ? 'retry' : 'again');
+    if (!button) return;
+    event.preventDefault();
+    button.click();
+  });
 
   /* `?` opens the help from any route, but never while typing or editing. The
    * practice key handler ignores it, so it cannot choose a letter as well. */
