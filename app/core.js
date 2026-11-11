@@ -1825,6 +1825,35 @@
     return out;
   }
 
+  /* Search the questions of every given set (normally browseSets(): active
+   * sets without their archived units) for one case-insensitive substring of
+   * the id, stem, passage, choices or explanations. Deleted questions are left
+   * out. `matches` keeps bank order and stops at `limit`; `total` counts every
+   * match. */
+  function searchQuestions(state, sets, query, limit) {
+    var needle = String(query == null ? '' : query).trim().toLowerCase();
+    var out = { total: 0, matches: [] };
+    if (!needle) return out;
+    var cap = limit > 0 ? limit : Infinity;
+    (sets || []).forEach(function (set) {
+      unitsOf(set).forEach(function (unit) {
+        unit.questions.forEach(function (question) {
+          if (isDeleted(state, set.id, question.id)) return;
+          var hay = [question.id, question.question, question.passage,
+            question.explanation]
+            .concat(question.choices, question.explanations || [])
+            .join('\n').toLowerCase();
+          if (hay.indexOf(needle) < 0) return;
+          out.total += 1;
+          if (out.matches.length < cap) {
+            out.matches.push({ set: set, unit: unit, question: question });
+          }
+        });
+      });
+    });
+    return out;
+  }
+
   /* Everything in the archive, newest first: whole sets (kind 'set') and single
    * units (kind 'unit'). */
   function archivedSets(state) {
@@ -2074,6 +2103,7 @@
     restoreUnit: restoreUnit,
     activeSets: activeSets,
     browseSets: browseSets,
+    searchQuestions: searchQuestions,
     archivedSets: archivedSets,
     allSets: allSets,
     findSet: findSet,

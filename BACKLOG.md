@@ -4,7 +4,7 @@
 
 - [x] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
 - Markdown/math rendering in stems and explanations.
-- [ ] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
+- [x] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
 - [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.
 - [ ] Keyboard shortcuts on the Results screen (<kbd>R</kbd> retry the missed questions, <kbd>P</kbd> practice again) and list them in the <kbd>?</kbd> dialog — a keyboard-only session ends on a screen whose actions are mouse/Tab-only.
 - [ ] Test that `serve.py` exits after `--idle-timeout` with no requests and stays up while requests arrive — the idle watchdog has no test in `test_server.py` or the acceptance gate.

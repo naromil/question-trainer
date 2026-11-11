@@ -2147,3 +2147,52 @@ test('setSessionShuffle: only unanswered questions change, and it round-trips', 
   C.setSessionShuffle(session, true, () => 0);
   assert.equal(session.questions[1], graded, 'a checked question is left as graded');
 });
+
+test('searchQuestions: one search across sets, deleted questions left out', () => {
+  const build = (raw) => {
+    const folder = C.normalizeFolder({ id: raw.id, title: raw.title, units: ['u.json'] }, raw.id);
+    const built = C.buildSet(folder, [{ file: 'u.json', raw }]);
+    assert.deepEqual(built.errors, []);
+    return built.set;
+  };
+  const first = build(rawSet({
+    id: 'set-a',
+    title: 'Set A',
+    questions: [
+      question({ id: 'a1', question: 'Capital of France?', choices: ['Paris', 'Rome'], answer: 0 }),
+      question({ id: 'a2', question: 'Largest ocean?', choices: ['Pacific', 'Arctic'], answer: 0,
+        explanation: 'It covers a third of the planet.' })
+    ]
+  }));
+  const second = build(rawSet({
+    id: 'set-b',
+    title: 'Set B',
+    questions: [
+      question({ id: 'b1', question: 'Paris is on which river?', choices: ['Seine', 'Thames'],
+        answer: 0 }),
+      question({ id: 'b2', question: 'Water boils at?', choices: ['100 C', '50 C'], answer: 0,
+        explanations: ['At sea level.', 'Too low.'] })
+    ]
+  }));
+  const state = C.emptyState(NOW);
+  const sets = [first, second];
+
+  assert.deepEqual(C.searchQuestions(state, sets, '   '), { total: 0, matches: [] });
+  const paris = C.searchQuestions(state, sets, '  PARIS ');
+  assert.equal(paris.total, 2);
+  assert.deepEqual(paris.matches.map((m) => [m.set.id, m.question.id]),
+    [['set-a', 'a1'], ['set-b', 'b1']], 'bank order, across sets');
+  assert.equal(paris.matches[0].unit.questions.includes(paris.matches[0].question), true);
+
+  assert.equal(C.searchQuestions(state, sets, 'third of the planet').total, 1, 'explanation');
+  assert.equal(C.searchQuestions(state, sets, 'sea level').total, 1, 'per-choice explanation');
+  assert.equal(C.searchQuestions(state, sets, 'b2').total, 1, 'question id');
+
+  const capped = C.searchQuestions(state, sets, 'a', 1);
+  assert.equal(capped.matches.length, 1);
+  assert.ok(capped.total > 1, 'total counts past the limit');
+
+  C.deleteQuestion(state, 'set-b', 'b1', NOW);
+  assert.deepEqual(C.searchQuestions(state, sets, 'paris').matches.map((m) => m.question.id),
+    ['a1'], 'a deleted question is not found');
+});

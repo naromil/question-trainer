@@ -951,6 +951,9 @@ textarea { width: 100%; font-family: var(--mono); font-size: .78rem; border-radi
 }
 .browse-stem { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browse-item .tag { flex: none; }
+a.search-hit { text-decoration: none; }
+.search-group h2 { font-size: 1rem; margin: 0 0 .5rem; }
+.search-group + .search-group { margin-top: .75rem; }
 .browse-viewer:focus { outline: none; }
 .browse-head { align-items: center; flex-wrap: wrap; }
 .browse-step { gap: .4rem; flex-wrap: nowrap; }

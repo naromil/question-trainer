@@ -772,9 +772,10 @@
   }
 
   function setActiveNav(path) {
-    /* Practice and the browser belong to the set list, not to their own
+    /* Practice, the browser and search belong to the set list, not to their own
      * nav entries. */
-    var active = path === '/practice' || path === '/browse' ? '/' : path;
+    var active = path === '/practice' || path === '/browse' || path === '/search'
+      ? '/' : path;
     $$('#nav a').forEach(function (link) {
       if (link.getAttribute('data-route') === active) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
@@ -890,6 +891,7 @@
     else if (route.path === '/format') renderFormat();
     else if (route.path === '/practice') renderPractice(route.params);
     else if (route.path === '/browse') renderBrowse(route.params);
+    else if (route.path === '/search') renderSearch(route.params);
     else renderHome();
     if (routeChanged) {
       appEl.classList.remove('view-in');
@@ -1113,6 +1115,8 @@
                 option.label + '</option>';
             }).join('') +
           '</select></label>' +
+          '<a class="btn btn-sm" href="#/search" title="Find questions in every set">' +
+            'Search questions</a>' +
         '</div>' +
         '<div class="sets" id="set-rows"></div>' +
         '<div class="set-empty" id="set-empty" hidden></div>' +
@@ -1133,6 +1137,105 @@
       renderSetRows(rows);
       bindHomeControls(rows);
     }
+  }
+
+  /* ------------------------------------------------------------ search */
+  /* Matches past this many are counted but not listed. */
+  var SEARCH_LIMIT = 200;
+
+  function matchCount(n) { return n + (n === 1 ? ' match' : ' matches'); }
+
+  function searchHref(query) {
+    return '#/search' + (query ? '?q=' + encodeURIComponent(query) : '');
+  }
+
+  /* One question search over every active set, from the Sets screen. Each
+   * match opens the question in Browse. The query lives in the hash, so Back
+   * from Browse returns to the same results. */
+  function renderSearch(params) {
+    var query = params.get('q') || '';
+    setPageTitle(query ? ['Search', query] : ['Search']);
+    appEl.innerHTML =
+      '<div class="search-view">' +
+        '<div class="prac-head">' +
+          '<a class="btn btn-ghost btn-sm" href="#/">← Sets</a>' +
+          '<h1 class="head-title">Search questions</h1>' +
+        '</div>' +
+        '<div class="set-tools">' +
+          '<label class="set-search"><span class="sr-only">Search every set</span>' +
+            '<input type="search" id="question-search" placeholder="Search every set" ' +
+              'value="' + esc(query) + '" autocomplete="off" spellcheck="false"></label>' +
+        '</div>' +
+        '<p class="small muted" id="search-count" aria-live="polite"></p>' +
+        '<div id="search-results"></div>' +
+      '</div>';
+    paintSearch(query);
+    var input = document.getElementById('question-search');
+    input.addEventListener('input', function (event) {
+      var value = event.target.value;
+      var hash = searchHref(value.trim() ? value : '');
+      /* Repaint in place so the input keeps focus; the hash follows quietly. */
+      if (location.hash !== hash) {
+        history.replaceState(null, '', hash);
+        lastRenderedHash = location.hash;
+      }
+      setPageTitle(value.trim() ? ['Search', value.trim()] : ['Search']);
+      paintSearch(value);
+    });
+    if (!query) input.focus({ preventScroll: true });
+  }
+
+  function paintSearch(query) {
+    var count = document.getElementById('search-count');
+    var list = document.getElementById('search-results');
+    if (!count || !list) return;
+    var sets = C.browseSets(state, SOURCE_SETS);
+    var found = C.searchQuestions(state, sets, query, SEARCH_LIMIT);
+    if (!query.trim()) {
+      count.textContent = 'Type to search the questions, passages, choices and ' +
+        'explanations of all ' + plural(sets.length, 'active set') + '.';
+      list.innerHTML = '';
+      return;
+    }
+    count.textContent = found.total === found.matches.length
+      ? matchCount(found.total)
+      : 'Showing the first ' + found.matches.length + ' of ' + found.total + ' matches';
+    if (!found.total) {
+      list.innerHTML = '<div class="card"><p>No questions match “' + esc(query.trim()) +
+        '”.</p><p class="small muted">Deleted questions and archived sets are not ' +
+        'searched; find them in the <a href="#/archive">Archive</a>.</p></div>';
+      return;
+    }
+    var groups = [];
+    found.matches.forEach(function (match) {
+      var last = groups[groups.length - 1];
+      if (!last || last.set !== match.set) {
+        last = { set: match.set, items: [] };
+        groups.push(last);
+      }
+      last.items.push(match);
+    });
+    list.innerHTML = groups.map(function (group) {
+      var multi = C.unitsOf(group.set).length > 1;
+      return '<section class="card search-group"><h2>' + esc(group.set.title) +
+        ' <span class="muted small">· ' + matchCount(group.items.length) +
+        '</span></h2><ol class="browse-list">' +
+        group.items.map(function (match) {
+          var rec = questionRecord(match.set.id, match.question.id);
+          var badge = rec ? '<span class="tag ' + shareTier(rec.s) + '">' +
+            Math.round(rec.s / 10) + '%</span>' : '<span class="tag new">new</span>';
+          return '<li><a class="browse-item search-hit" href="' +
+            esc(browseHref(match.set.id, '', match.question.id)) + '">' +
+            (multi ? '<span class="tag units">' + esc(match.unit.title) + '</span>' : '') +
+            '<span class="browse-stem">' + esc(match.question.question) + '</span>' +
+            badge + '</a></li>';
+        }).join('') + '</ol></section>';
+    }).join('');
+    /* Browse keeps its own filter between visits; clear it so the chosen
+     * question is the one that opens. */
+    $$('.search-hit', list).forEach(function (link) {
+      link.addEventListener('click', function () { browseQuery = ''; });
+    });
   }
 
   /* ------------------------------------------------------------ archive */
@@ -2992,8 +3095,8 @@
     openShortcuts(document.activeElement);
   });
 
-  /* `/` jumps to the filter box on Sets and Browse, the usual search
-   * shortcut. Like `?` it never fires while typing, editing or in a dialog. */
+  /* `/` jumps to the filter box on Sets and Browse (the search box on Search),
+   * the usual search shortcut. Like `?` it never fires while typing, editing or in a dialog. */
   document.addEventListener('keydown', function (event) {
     if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey) return;
     var target = event.target || {};
@@ -3002,7 +3105,8 @@
         target.isContentEditable) return;
     if (document.querySelector('dialog[open]')) return;
     var input = document.getElementById('set-filter') ||
-      document.getElementById('browse-filter');
+      document.getElementById('browse-filter') ||
+      document.getElementById('question-search');
     if (!input) return;
     event.preventDefault();
     input.focus();
