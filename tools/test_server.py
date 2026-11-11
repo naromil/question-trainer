@@ -106,15 +106,18 @@ class ServeProcess:
 
     URL_RE = re.compile(r"Question Trainer: (http://\S+)")
 
-    def __init__(self, progress_path: Path) -> None:
+    def __init__(self, progress_path: Path, idle_timeout: float | None = None) -> None:
+        command = [
+            sys.executable,
+            str(SERVE),
+            "--port", "0",
+            "--no-open",
+            "--progress", str(progress_path),
+        ]
+        if idle_timeout is not None:
+            command += ["--idle-timeout", f"{idle_timeout:g}"]
         self.proc = subprocess.Popen(
-            [
-                sys.executable,
-                str(SERVE),
-                "--port", "0",
-                "--no-open",
-                "--progress", str(progress_path),
-            ],
+            command,
             cwd=str(ROOT),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -208,8 +211,10 @@ class TestServer(unittest.TestCase):
         self.tmp = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
 
-    def start_server(self, progress: Path | None = None) -> ServeProcess:
-        server = ServeProcess(progress or self.tmp / "progress.json")
+    def start_server(
+        self, progress: Path | None = None, idle_timeout: float | None = None
+    ) -> ServeProcess:
+        server = ServeProcess(progress or self.tmp / "progress.json", idle_timeout)
         self.addCleanup(server.stop)
         return server
 
@@ -483,6 +488,38 @@ class TestServer(unittest.TestCase):
             (server.base + "/app/", str(path)),
             serve.probe_running(parsed.hostname, parsed.port),
         )
+
+    # -- idle watchdog ----------------------------------------------------
+    def wait_for_exit(self, server: ServeProcess, timeout: float) -> int | None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            code = server.proc.poll()
+            if code is not None:
+                return code
+            time.sleep(0.05)
+        return server.proc.poll()
+
+    def test_idle_timeout_stops_server_without_requests(self) -> None:
+        server = self.start_server(idle_timeout=1)
+        started = time.monotonic()
+        code = self.wait_for_exit(server, 10)
+        self.assertEqual(0, code, f"server did not exit cleanly: {server.output()}")
+        # The readiness probe was the last request, so it waited the timeout out.
+        self.assertGreaterEqual(time.monotonic() - started, 0.8)
+        server._reader.join(timeout=2)
+        self.assertIn("No requests for 1s; stopping.", server.output())
+
+    def test_idle_timeout_waits_while_requests_arrive(self) -> None:
+        server = self.start_server(idle_timeout=1.5)
+        busy_until = time.monotonic() + 4
+        while time.monotonic() < busy_until:
+            status, _, _ = http_request("GET", server.base + API_PATH, timeout=2)
+            self.assertEqual(204, status)
+            self.assertIsNone(server.proc.poll(), "stopped while requests kept arriving")
+            time.sleep(0.3)
+        self.assertIsNone(server.proc.poll(), "stopped while requests kept arriving")
+        # Once the requests stop, the same watchdog shuts it down.
+        self.assertEqual(0, self.wait_for_exit(server, 10), server.output())
 
 
 if __name__ == "__main__":
