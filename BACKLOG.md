@@ -2,14 +2,19 @@
 
 ## Routine (Claude may build these without asking)
 
-- [x] Optional per-session shuffle of choice order — touches letter shortcuts, per-choice explanations and the stored in-flight session.
 - Markdown/math rendering in stems and explanations.
-- [x] Search across every set's questions from the Sets screen — a new screen/flow beyond the per-set Browse filter.
 - [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.
-- [x] Keyboard shortcuts on the Results screen (<kbd>R</kbd> retry the missed questions, <kbd>P</kbd> practice again) and list them in the <kbd>?</kbd> dialog — a keyboard-only session ends on a screen whose actions are mouse/Tab-only.
-- [x] Test that `serve.py` exits after `--idle-timeout` with no requests and stays up while requests arrive — the idle watchdog has no test in `test_server.py` or the acceptance gate.
+- [ ] Each row of the Results "Question by question" log links to that question in Browse — today a miss can only be re-read in the session-local review card, not opened with its record and explanations.
+- [ ] Show the unit tag on each question during a whole-set session of a multi-unit set — the unit is only shown when the session itself is unit-scoped, so you can't tell where a question comes from.
+- [ ] Review forecast on the Progress screen: how many questions fall due on each of the next 7 days — a standard SRS view; pure counting in `core.js` from existing `due` dates.
+- [ ] Keep the Sets screen's filter text and sort choice in the address, like Search does — a reload or Back from a set resets them to empty and Index order.
+- [ ] Print stylesheet (`@media print`) for Browse and Results — hides nav, buttons and animations so a set or a session's misses print as a clean study sheet.
+- [ ] Unit tests for `dueQuestions` (unanswered and not-yet-due excluded) and `recentDayKeys` (14 distinct days across a DST change) — both drive the Review and Progress screens but have no direct test.
 
 ## Proposed (needs the owner's OK — move to Routine to approve)
+
+- Undo the last answer during a session (restore the question's previous record) — rewrites stored progress and grading counters, so it touches the data-model invariants.
+- Custom session length beyond the fixed 5–50 choices — changes settings validation in the progress format and the 10-question default the acceptance gate checks.
 
 ## Ideas for the owner to consider (never built automatically)
 
