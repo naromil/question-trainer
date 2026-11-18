@@ -1643,6 +1643,36 @@
     return keys.reverse();
   }
 
+  /* How many answered questions fall due on each of the next `days` local
+   * calendar days, today first: [{ date, n }]. Today also counts everything
+   * already due, so its bar is the whole review load for the day. Due times
+   * past the window are not counted. Walks a local-noon cursor like
+   * recentDayKeys(), so a DST change never skips or repeats a date. */
+  function reviewForecast(state, sets, now, days) {
+    now = typeof now === 'number' ? now : Date.now();
+    var count = Math.max(0, Math.floor(Number(days) || 0));
+    var cursor = new Date(now);
+    cursor.setHours(12, 0, 0, 0);
+    var out = [];
+    var index = {};
+    for (var i = 0; i < count; i++) {
+      var key = dayKey(cursor.getTime());
+      index[key] = out.length;
+      out.push({ date: key, n: 0 });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    if (!out.length) return out;
+    (sets || []).forEach(function (set) {
+      questionsOf(set).forEach(function (question) {
+        var rec = recordFor(state, set.id, question.id);
+        if (!rec || !(rec.a > 0)) return;
+        var slot = rec.due <= now ? 0 : index[dayKey(rec.due)];
+        if (typeof slot === 'number') out[slot].n += 1;
+      });
+    });
+    return out;
+  }
+
   function activity(state, days, now) {
     now = typeof now === 'number' ? now : Date.now();
     return recentDayKeys(now, days).map(function (key) {
@@ -2057,6 +2087,7 @@
     DONT_KNOW_CHOICE: DONT_KNOW_CHOICE,
     dayKey: dayKey,
     recentDayKeys: recentDayKeys,
+    reviewForecast: reviewForecast,
     letterFor: letterFor,
     choicesFor: choicesFor,
     questionKey: questionKey,

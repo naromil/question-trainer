@@ -2052,6 +2052,42 @@ test('nextDueAt: the earliest answered question not yet due, or null', () => {
     'everything is already due');
 });
 
+test('reviewForecast: answered questions per local day, overdue ones on today', () => {
+  const set = loadSet(rawSet({
+    id: 'u1',
+    questions: ['q1', 'q2', 'q3', 'q4', 'q5'].map((id) => question({ id }))
+  }));
+  const now = new Date(2026, 10, 18, 9, 0, 0).getTime();
+  const state = C.emptyState(now);
+  const put = (id, due) => {
+    state.q[C.questionKey(set.id, id)] = { a: 1, c: 1, f: 1, s: 800, box: 2, due, last: now };
+  };
+  put('q1', now - 3 * DAY);                                 /* overdue: today */
+  put('q2', new Date(2026, 10, 18, 22, 0, 0).getTime());   /* later today */
+  put('q3', new Date(2026, 10, 20, 1, 0, 0).getTime());    /* in two days */
+  put('q4', new Date(2026, 10, 30, 12, 0, 0).getTime());   /* past the window */
+  /* q5 is unanswered and never counted. */
+
+  const days = C.reviewForecast(state, [set], now, 7);
+  assert.equal(days.length, 7);
+  assert.equal(days[0].date, '2026-11-18');
+  assert.equal(days[6].date, '2026-11-24');
+  assert.deepEqual(days.map((day) => day.n), [2, 0, 1, 0, 0, 0, 0]);
+  assert.deepEqual(C.reviewForecast(state, [], now, 7).map((day) => day.n),
+    [0, 0, 0, 0, 0, 0, 0], 'no sets, nothing due');
+  assert.deepEqual(C.reviewForecast(state, [set], now, 0), []);
+
+  /* Across a DST change every entry is still a distinct, consecutive date. */
+  [new Date(2026, 2, 5, 12).getTime(), new Date(2026, 9, 22, 12).getTime()].forEach((start) => {
+    const window = C.reviewForecast(state, [set], start, 14);
+    assert.equal(new Set(window.map((day) => day.date)).size, 14);
+    for (let i = 1; i < window.length; i++) {
+      assert.equal(C.calendarDaysBetween(new Date(window[i - 1].date + 'T12:00:00').getTime(),
+        new Date(window[i].date + 'T12:00:00').getTime()), 1);
+    }
+  });
+});
+
 test('calendarDaysBetween: counts local calendar days, not 24-hour blocks', () => {
   const morning = new Date(2026, 10, 4, 9, 0, 0).getTime();
   assert.equal(C.calendarDaysBetween(morning, new Date(2026, 10, 4, 23, 0, 0).getTime()), 0);

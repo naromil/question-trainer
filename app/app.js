@@ -102,6 +102,16 @@
       return '';
     }
   }
+  /* "Mon", "Tue"… for a local YYYY-MM-DD date key. */
+  function weekdayLabel(key) {
+    var parts = String(key).split('-');
+    var date = new Date(+parts[0], +parts[1] - 1, +parts[2], 12);
+    try {
+      return date.toLocaleDateString(undefined, { weekday: 'short' });
+    } catch (err) {
+      return key;
+    }
+  }
   function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
   function clampInt(n, lo, hi) { return Math.min(hi, Math.max(lo, n | 0)); }
   function letterFor(index) { return C.letterFor(index); }
@@ -2633,6 +2643,25 @@
     '<p class="sr-only">Last 14 days: ' + plural(fortnight, 'answer') + '; busiest day ' +
       busiest.date + ' with ' + plural(busiest.a, 'answer') + '.</p>';
 
+    /* Review load for the coming week, over active sets only: archived ones
+     * keep their schedules but cannot be reviewed until restored. */
+    var forecast = C.reviewForecast(state, C.activeSets(state, SOURCE_SETS), now, 7);
+    var forecastPeak = forecast.reduce(function (n, day) { return Math.max(n, day.n); }, 0);
+    var forecastTotal = forecast.reduce(function (n, day) { return n + day.n; }, 0);
+    var forecastHTML = '<ol class="forecast">' + forecast.map(function (day, i) {
+      var h = forecastPeak ? Math.round((day.n / forecastPeak) * 100) : 0;
+      var label = i === 0 ? 'Today' : weekdayLabel(day.date);
+      return '<li' + (day.n ? ' class="has"' : '') + ' title="' + day.date + ': ' +
+        plural(day.n, 'question') + ' due">' +
+        '<b>' + day.n + '</b>' +
+        '<span class="forecast-bar" aria-hidden="true"><i style="height:' +
+          Math.max(h, 6) + '%"></i></span>' +
+        '<span class="forecast-day">' + label +
+          '<span class="sr-only">: ' + plural(day.n, 'question') + ' due</span></span></li>';
+    }).join('') + '</ol>' +
+    '<p class="small muted">' + plural(forecastTotal, 'review') +
+      ' in the next 7 days. Today includes everything already due.</p>';
+
     var table = rows.length ? rows.map(function (row) {
       return '<tr><td>' + esc(row.title) +
         (row.archived ? ' <span class="tag">archived</span>' : '') +
@@ -2689,6 +2718,7 @@
         '<div class="stat"><b>' + due + '</b><span>due now</span></div>' +
       '</div></div>' +
       '<div class="card"><h2>Last 14 days</h2>' + activity + '</div>' +
+      '<div class="card"><h2>Next 7 days</h2>' + forecastHTML + '</div>' +
       '<div class="card"><h2>Sets</h2>' +
         '<div class="table-scroll" role="region" aria-label="Set progress table" tabindex="-1">' +
         '<table class="sets-table">' +
