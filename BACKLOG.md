@@ -4,7 +4,7 @@
 
 - Markdown/math rendering in stems and explanations.
 - [ ] Personal notes attached to a question. - And can be edited conveniently during practice sessions.
-- [ ] Each row of the Results "Question by question" log links to that question in Browse — today a miss can only be re-read in the session-local review card, not opened with its record and explanations.
+- [x] Each row of the Results "Question by question" log links to that question in Browse — today a miss can only be re-read in the session-local review card, not opened with its record and explanations.
 - [ ] Show the unit tag on each question during a whole-set session of a multi-unit set — the unit is only shown when the session itself is unit-scoped, so you can't tell where a question comes from.
 - [ ] Review forecast on the Progress screen: how many questions fall due on each of the next 7 days — a standard SRS view; pure counting in `core.js` from existing `due` dates.
 - [ ] Keep the Sets screen's filter text and sort choice in the address, like Search does — a reload or Back from a set resets them to empty and Index order.

@@ -2420,6 +2420,9 @@
       : '<span class="tag ' + (delta > 0 ? 'mastered' : 'warn') + '">' +
         esc(sessionTitle()) + ' ' + (delta > 0 ? '+' : '') + delta + '</span>';
 
+    /* Each row opens its question in Browse, with its record and every
+     * explanation. A new tab keeps these results: leaving practice in this
+     * tab would end the finished session. */
     var rows = results.map(function (r, i) {
       var question = r.question;
       return '<div class="result-row" style="--i:' + i + '">' +
@@ -2427,8 +2430,12 @@
         '<span class="' + (r.correct ? 'ok' : 'no') + '" aria-hidden="true">' +
           (r.correct ? '✓' : '✗') + '</span>' +
         '<span class="sr-only">' + (r.correct ? 'Correct' : 'Incorrect') + '</span>' +
-        '<span class="grow">' + esc(question.question.slice(0, 80)) +
-          (question.question.length > 80 ? '…' : '') + '</span>' +
+        '<a class="grow result-link" target="_blank" rel="noopener" href="' +
+          browseHref(session.set.id, session.cfg.unitId || '', question.id) +
+          '" title="Open this question in Browse (new tab)">' +
+          esc(question.question.slice(0, 80)) +
+          (question.question.length > 80 ? '…' : '') +
+          '<span class="sr-only"> (opens in Browse in a new tab)</span></a>' +
         '<span class="muted small"><span class="sr-only">your answer </span>' + r.chosen +
           (r.correct ? '' : ' <span aria-hidden="true">→</span>' +
             '<span class="sr-only">, correct answer </span>' + r.expected) + '</span>' +

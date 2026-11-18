@@ -868,6 +868,8 @@ table .bar { width: 110px; }
 .result-row .n { color: var(--ink-3); width: 1.6rem; }
 .result-row .ok { color: var(--green); font-weight: 650; }
 .result-row .no { color: var(--red); font-weight: 650; }
+.result-row .result-link { color: inherit; text-decoration: none; }
+.result-row .result-link:hover, .result-row .result-link:focus-visible { color: var(--blue); text-decoration: underline; }
 @keyframes row-in {
   from { opacity: 0; transform: translateY(5px); }
   to { opacity: 1; transform: none; }
