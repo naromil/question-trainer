@@ -396,6 +396,19 @@
     return null;
   }
 
+  /* The unit holding a question, by question id (ids are unique across a
+   * set's units), or null when no unit has it. */
+  function unitOfQuestion(set, questionId) {
+    var units = unitsOf(set);
+    for (var i = 0; i < units.length; i++) {
+      var questions = units[i].questions || [];
+      for (var j = 0; j < questions.length; j++) {
+        if (questions[j].id === questionId) return units[i];
+      }
+    }
+    return null;
+  }
+
   /* The questions a session draws from: one unit, or the whole set in unit
    * order. Progress keys stay set id / question id either way. */
   function questionsOf(set, unitId) {
@@ -2068,6 +2081,7 @@
     tierOf: tierOf,
     masteryOf: masteryOf,
     dueQuestions: dueQuestions,
+    unitOfQuestion: unitOfQuestion,
     nextDueAt: nextDueAt,
     calendarDaysBetween: calendarDaysBetween,
     selectSession: selectSession,

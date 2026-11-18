@@ -2066,14 +2066,22 @@
         choiceHTML(i, question, text) + '</li>';
     }).join('');
 
+    /* A unit session names its unit; a whole-set session of a multi-unit set
+     * names the unit each question comes from. */
+    var unitTag = '';
+    if (session.cfg.unitId) {
+      unitTag = (C.unitOf(session.set, session.cfg.unitId) || {}).title || '';
+    } else if (C.unitsOf(session.set).length > 1) {
+      unitTag = (C.unitOfQuestion(session.set, question.id) || {}).title || '';
+    }
+
     var card = document.getElementById('qcard');
     card.className = 'card';
     card.innerHTML =
       deletedNote +
       '<div class="q-meta">' +
         '<span class="tag">' + esc(session.set.title) + '</span>' +
-        (session.cfg.unitId ? '<span class="tag units">' +
-          esc((C.unitOf(session.set, session.cfg.unitId) || {}).title || '') + '</span>' : '') +
+        (unitTag ? '<span class="tag units">' + esc(unitTag) + '</span>' : '') +
         '<span class="tag">' + (index + 1) + ' of ' + session.questions.length + '</span>' +
         '<button type="button" class="q-delete" id="delete-question"' +
           ' aria-keyshortcuts="Delete" title="Leave this question out of practice and ' +

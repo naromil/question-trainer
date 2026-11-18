@@ -712,6 +712,27 @@ test('unitsOf/unitOf/questionsOf: a set is the union of its units', () => {
   assert.deepEqual(C.questionsOf(set, 'nope'), []);
 });
 
+test('unitOfQuestion: finds the unit a question comes from, by id', () => {
+  const set = loadSet(
+    rawSet({
+      id: 'u1', title: 'Unit One',
+      questions: [question({ id: 'q1' }), question({ id: 'q2' })]
+    }),
+    rawSet({ id: 'u2', title: 'Unit Two', questions: [question({ id: 'q3' })] })
+  );
+  assert.equal(C.unitOfQuestion(set, 'q1').id, 'u1');
+  assert.equal(C.unitOfQuestion(set, 'q3').title, 'Unit Two');
+  assert.equal(C.unitOfQuestion(set, 'nope'), null);
+  assert.equal(C.unitOfQuestion(null, 'q1'), null);
+
+  const picked = C.selectSession(C.emptyState(NOW), set.id, C.questionsOf(set), {
+    mode: 'practice', length: 5, now: NOW
+  });
+  const shuffled = C.withChoiceOrder(picked[0], [1, 0, 2, 3]);
+  assert.equal(C.unitOfQuestion(set, shuffled.id).id,
+    C.unitOfQuestion(set, picked[0].id).id, 'a shuffled copy keeps its unit');
+});
+
 test('a unit session still keys progress by set id plus question id', () => {
   const set = loadSet(
     rawSet({ id: 'u1', questions: [question({ id: 'q1' })] }),
