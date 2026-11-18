@@ -52,10 +52,11 @@
   /* How to take back the last in-session delete, while its note is shown. */
   var deleteUndo = null;
   var timer = null;
-  /* Home list controls survive re-renders of the page but not a reload. */
+  /* Home list controls. The address carries them (see syncHomeHash), so a
+   * reload or Back restores them; a bare "#/" link keeps the last values. */
   var homeQuery = '';
   var homeSort = 'index';
-  /* Question browser filters; like the home controls, they last until a
+  /* Question browser filters; unlike the home controls, they last until a
    * reload. The set, unit and selected question live in the hash. */
   var browseQuery = '';
   var browseShowDeleted = true;
@@ -902,7 +903,7 @@
     else if (route.path === '/practice') renderPractice(route.params);
     else if (route.path === '/browse') renderBrowse(route.params);
     else if (route.path === '/search') renderSearch(route.params);
-    else renderHome();
+    else renderHome(route.params);
     if (routeChanged) {
       appEl.classList.remove('view-in');
       void appEl.offsetWidth;
@@ -1036,6 +1037,7 @@
     if (!list) return;
     var rows = C.sortSetRows(C.filterSetRows(activeRows, homeQuery), homeSort);
     list.innerHTML = rows.map(setCard).join('');
+    syncHomeHash();
 
     var count = document.getElementById('set-list-count');
     if (count) {
@@ -1066,6 +1068,16 @@
     bindArchiveButtons(list);
   }
 
+  /* Keep the filter and sort in the address without a hashchange, like
+   * Search: the list repaints in place and the input keeps focus. */
+  function syncHomeHash() {
+    var hash = C.setListHash(homeQuery, homeSort);
+    var current = location.hash || '#/';
+    if (current === hash) return;
+    history.replaceState(null, '', hash);
+    lastRenderedHash = location.hash;
+  }
+
   function bindHomeControls(activeRows) {
     var input = document.getElementById('set-filter');
     if (input) input.addEventListener('input', function (event) {
@@ -1074,13 +1086,19 @@
     });
     var select = document.getElementById('set-sort');
     if (select) select.addEventListener('change', function (event) {
-      homeSort = event.target.value;
+      homeSort = C.setSortOf(event.target.value);
       renderSetRows(activeRows);
     });
   }
 
-  function renderHome() {
+  function renderHome(params) {
     setPageTitle(['Sets']);
+    /* An address that names a filter or a sort wins; a bare one keeps what
+     * the list showed last. */
+    if (params && (params.has('q') || params.has('sort'))) {
+      homeQuery = params.get('q') || '';
+      homeSort = C.setSortOf(params.get('sort'));
+    }
     var active = C.activeSets(state, SOURCE_SETS);
     var archived = C.archivedSets(state);
     var all = C.allSets(state, SOURCE_SETS);

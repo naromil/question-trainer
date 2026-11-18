@@ -1248,6 +1248,23 @@ test('sortSetRows: index, title, mastery and due orders', () => {
     'the input array is not reordered');
 });
 
+test('setListHash/setSortOf: the Sets filter and sort round-trip through the address', () => {
+  assert.equal(C.setListHash('', 'index'), '#/', 'defaults leave the bare address');
+  assert.equal(C.setListHash('   ', undefined), '#/', 'a blank filter is no filter');
+  assert.equal(C.setListHash('cell bio', 'index'), '#/?q=cell%20bio');
+  assert.equal(C.setListHash('', 'mastery'), '#/?sort=mastery');
+  assert.equal(C.setListHash('a&b=c #x', 'due'), '#/?q=a%26b%3Dc%20%23x&sort=due');
+  assert.equal(C.setListHash('x', 'bogus'), '#/?q=x', 'an unknown sort is dropped');
+  ['index', 'title', 'mastery', 'due'].forEach((sort) => assert.equal(C.setSortOf(sort), sort));
+  assert.equal(C.setSortOf('bogus'), 'index');
+  assert.equal(C.setSortOf(null), 'index');
+
+  const hash = C.setListHash('Größe + 50%', 'title');
+  const params = new URLSearchParams(hash.slice(hash.indexOf('?') + 1));
+  assert.equal(params.get('q'), 'Größe + 50%', 'the filter text survives the round trip');
+  assert.equal(C.setSortOf(params.get('sort')), 'title');
+});
+
 test('sortSetRows: every mode falls back to source order on a tie', () => {
   const rows = [
     { id: 'first', title: 'Same', points: 20, due: 3 },

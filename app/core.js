@@ -1574,6 +1574,25 @@
   /* Home order. Ties keep source order in every mode: the original index is
    * carried alongside and used as the final tiebreak, so the result does not
    * depend on the engine's sort stability. */
+  /* The Sets screen's sort choices; anything else falls back to index. */
+  var SET_SORTS = ['index', 'title', 'mastery', 'due'];
+
+  function setSortOf(value) {
+    return SET_SORTS.indexOf(value) >= 0 ? value : 'index';
+  }
+
+  /* The Sets screen address for a filter and a sort, so a reload or Back
+   * returns to the same list. The defaults (no filter, index order) leave
+   * the bare "#/". */
+  function setListHash(query, sort) {
+    var parts = [];
+    var text = String(query == null ? '' : query);
+    if (text.trim()) parts.push('q=' + encodeURIComponent(text));
+    sort = setSortOf(sort);
+    if (sort !== 'index') parts.push('sort=' + sort);
+    return '#/' + (parts.length ? '?' + parts.join('&') : '');
+  }
+
   function sortSetRows(rows, sort) {
     var keyed = (rows || []).map(function (row, i) { return { row: row, i: i }; });
     keyed.sort(function (a, b) {
@@ -2109,6 +2128,8 @@
     applyAnswer: applyAnswer,
     filterSetRows: filterSetRows,
     sortSetRows: sortSetRows,
+    setSortOf: setSortOf,
+    setListHash: setListHash,
     tierOf: tierOf,
     masteryOf: masteryOf,
     dueQuestions: dueQuestions,
